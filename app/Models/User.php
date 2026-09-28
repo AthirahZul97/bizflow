@@ -77,4 +77,14 @@ class User extends Authenticatable
     {
         return $this->hasMany(Invoice::class);
     }
+
+    /**
+     * Get the expenses recorded by the user.
+     *
+     * @return HasMany<Expense, $this>
+     */
+    public function expenses(): HasMany
+    {
+        return $this->hasMany(Expense::class);
+    }
 }

@@ -32,6 +32,9 @@
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('invoices.*')) active @endif" href="{{ route('invoices.index') }}">Invoices</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('expenses.*')) active @endif" href="{{ route('expenses.index') }}">Expenses</a>
+                        </li>
                     @endauth
                     <li class="nav-item">
                         <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\InvoiceStatusController;
@@ -40,6 +41,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/invoices/{invoice}/mark-unpaid', [InvoiceStatusController::class, 'markUnpaid'])->name('invoices.mark-unpaid');
     Route::get('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'confirmCancel'])->name('invoices.cancel.confirm');
     Route::post('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'cancel'])->name('invoices.cancel');
+
+    Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
+    Route::resource('expenses', ExpenseController::class);
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });
