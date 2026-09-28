@@ -10,7 +10,7 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="d-flex flex-column min-vh-100 bg-body-tertiary">
-    <nav class="navbar navbar-expand-md bg-dark" data-bs-theme="dark">
+    <nav class="navbar navbar-expand-md bg-dark d-print-none" data-bs-theme="dark">
         <div class="container">
             <a class="navbar-brand fw-semibold" href="{{ url('/') }}">{{ config('app.name', 'BizFlow') }}</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"
@@ -28,6 +28,9 @@
                         </li>
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('products.*')) active @endif" href="{{ route('products.index') }}">Products &amp; Services</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('invoices.*')) active @endif" href="{{ route('invoices.index') }}">Invoices</a>
                         </li>
                     @endauth
                     <li class="nav-item">
@@ -70,11 +73,18 @@
                 </div>
             @endif
 
+            @if (session('error'))
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    {{ session('error') }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            @endif
+
             @yield('content')
         </div>
     </main>
 
-    <footer class="py-3 border-top bg-body">
+    <footer class="py-3 border-top bg-body d-print-none">
         <div class="container small text-body-secondary">
             &copy; {{ date('Y') }} {{ config('app.name', 'BizFlow') }}
         </div>

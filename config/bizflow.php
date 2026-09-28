@@ -17,4 +17,20 @@ return [
         'symbol' => 'RM',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Invoices
+    |--------------------------------------------------------------------------
+    |
+    | Invoice numbers are assigned per user when an invoice is issued, e.g.
+    | INV-00001. The sequence is continuous and never reset or reused.
+    |
+    */
+
+    'invoice' => [
+        'number_prefix' => 'INV-',
+        'number_padding' => 5,
+        'payment_terms_days' => 30,
+    ],
+
 ];

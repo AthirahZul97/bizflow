@@ -99,17 +99,25 @@ class CustomerController extends Controller implements HasMiddleware
      */
     public function delete(Customer $customer): View
     {
-        return view('customers.delete', compact('customer'));
+        return view('customers.delete', [
+            'customer' => $customer,
+            'hasInvoices' => $customer->invoices()->exists(),
+        ]);
     }
 
     /**
      * Permanently delete a customer.
      *
-     * This is the single place customers are deleted. The Invoice module will add
-     * its "customer has invoices" guard here, backed by a restrictOnDelete foreign key.
+     * This is the single place customers are deleted. A customer with invoices is
+     * kept, backed by the restrictOnDelete foreign key on invoices.customer_id.
      */
     public function destroy(Customer $customer): RedirectResponse
     {
+        if ($customer->invoices()->exists()) {
+            return redirect()->route('customers.show', $customer)
+                ->with('error', 'This customer has invoices and cannot be deleted.');
+        }
+
         $customer->delete();
 
         return redirect()->route('customers.index')

@@ -110,18 +110,25 @@ class ProductController extends Controller implements HasMiddleware
      */
     public function delete(Product $product): View
     {
-        return view('products.delete', compact('product'));
+        return view('products.delete', [
+            'product' => $product,
+            'usedOnInvoices' => $product->invoiceItems()->exists(),
+        ]);
     }
 
     /**
      * Permanently delete a product or service.
      *
-     * This is the single place items are deleted. The Invoice module will add its
-     * "item is used on invoices, deactivate it instead" guard here, backed by a
-     * restrictOnDelete foreign key on invoice_items.product_id.
+     * This is the single place items are deleted. An item used on invoices is kept,
+     * backed by the restrictOnDelete foreign key on invoice_items.product_id.
      */
     public function destroy(Product $product): RedirectResponse
     {
+        if ($product->invoiceItems()->exists()) {
+            return redirect()->route('products.show', $product)
+                ->with('error', 'This item is used on invoices and cannot be deleted. Mark it inactive instead.');
+        }
+
         $product->delete();
 
         return redirect()->route('products.index')

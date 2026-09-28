@@ -4,6 +4,8 @@ use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\HealthCheckController;
+use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\InvoiceStatusController;
 use App\Http\Controllers\ProductController;
 use Illuminate\Support\Facades\Route;
 
@@ -29,6 +31,15 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/products/{product}/delete', [ProductController::class, 'delete'])->name('products.delete');
     Route::resource('products', ProductController::class);
+
+    Route::get('/invoices/{invoice}/delete', [InvoiceController::class, 'delete'])->name('invoices.delete');
+    Route::resource('invoices', InvoiceController::class);
+
+    Route::post('/invoices/{invoice}/issue', [InvoiceStatusController::class, 'issue'])->name('invoices.issue');
+    Route::post('/invoices/{invoice}/mark-paid', [InvoiceStatusController::class, 'markPaid'])->name('invoices.mark-paid');
+    Route::post('/invoices/{invoice}/mark-unpaid', [InvoiceStatusController::class, 'markUnpaid'])->name('invoices.mark-unpaid');
+    Route::get('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'confirmCancel'])->name('invoices.cancel.confirm');
+    Route::post('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'cancel'])->name('invoices.cancel');
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });
