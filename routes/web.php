@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\HealthCheckController;
+use App\Http\Controllers\ProductController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -25,6 +26,9 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/customers/{customer}/delete', [CustomerController::class, 'delete'])->name('customers.delete');
     Route::resource('customers', CustomerController::class);
+
+    Route::get('/products/{product}/delete', [ProductController::class, 'delete'])->name('products.delete');
+    Route::resource('products', ProductController::class);
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });
