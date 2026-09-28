@@ -19,9 +19,37 @@
             </button>
             <div class="collapse navbar-collapse" id="mainNav">
                 <ul class="navbar-nav ms-auto">
+                    @auth
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('dashboard')) active @endif" href="{{ route('dashboard') }}">Dashboard</a>
+                        </li>
+                    @endauth
                     <li class="nav-item">
                         <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>
                     </li>
+                    @guest
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('login')) active @endif" href="{{ route('login') }}">Log in</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('register')) active @endif" href="{{ route('register') }}">Register</a>
+                        </li>
+                    @endguest
+                    @auth
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                {{ Auth::user()->name }}
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <form method="POST" action="{{ route('logout') }}">
+                                        @csrf
+                                        <button type="submit" class="dropdown-item">Log out</button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </li>
+                    @endauth
                 </ul>
             </div>
         </div>
@@ -29,6 +57,13 @@
 
     <main class="flex-grow-1 py-4">
         <div class="container">
+            @if (session('status'))
+                <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    {{ session('status') }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            @endif
+
             @yield('content')
         </div>
     </main>
