@@ -23,6 +23,9 @@
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('dashboard')) active @endif" href="{{ route('dashboard') }}">Dashboard</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('customers.*')) active @endif" href="{{ route('customers.index') }}">Customers</a>
+                        </li>
                     @endauth
                     <li class="nav-item">
                         <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>
