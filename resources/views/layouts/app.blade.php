@@ -35,6 +35,9 @@
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('expenses.*')) active @endif" href="{{ route('expenses.index') }}">Expenses</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('reports.*')) active @endif" href="{{ route('reports.summary') }}">Reports</a>
+                        </li>
                     @endauth
                     <li class="nav-item">
                         <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>

@@ -9,6 +9,7 @@ use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\InvoiceStatusController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\ReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -45,6 +46,13 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
     Route::resource('expenses', ExpenseController::class);
+
+    Route::prefix('reports')->name('reports.')->controller(ReportController::class)->group(function () {
+        Route::get('/', 'summary')->name('summary');
+        Route::get('/customers', 'customers')->name('customers');
+        Route::get('/invoices', 'invoices')->name('invoices');
+        Route::get('/expenses', 'expenses')->name('expenses');
+    });
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });

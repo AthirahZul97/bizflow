@@ -32,6 +32,8 @@
     </div>
 
     @include('dashboard._trend')
+
+    <p class="text-end mb-4"><a href="{{ route('reports.summary') }}" data-dashboard-reports-link>See full reports &rarr;</a></p>
     @include('dashboard._recent')
 
     <p class="small text-body-secondary mb-0">
