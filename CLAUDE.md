@@ -5,9 +5,11 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
 
 ## Current status
 
-- Sprint 1 (foundation) is done: Laravel scaffold, Bootstrap layout (`resources/views/layouts/app.blade.php`),
-  `/health` status page (`HealthCheckController`) and tests.
-- No business modules exist yet. Only build the module the current task asks for.
+- All MVP modules are complete: Authentication, Customers, Products / Services, Invoices,
+  Expenses, Dashboard and Reports.
+- Final MVP polish is being completed; the current stage is final MVP verification.
+- Do not start new modules or deferred scope (see README "Known limitations and future scope")
+  unless a task explicitly asks for it.
 
 ## Data isolation (critical)
 
