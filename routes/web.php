@@ -7,6 +7,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\InvoicePdfController;
 use App\Http\Controllers\InvoiceStatusController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReportController;
@@ -43,6 +44,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/invoices/{invoice}/mark-unpaid', [InvoiceStatusController::class, 'markUnpaid'])->name('invoices.mark-unpaid');
     Route::get('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'confirmCancel'])->name('invoices.cancel.confirm');
     Route::post('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'cancel'])->name('invoices.cancel');
+    Route::get('/invoices/{invoice}/pdf', InvoicePdfController::class)->name('invoices.pdf');
 
     Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
     Route::resource('expenses', ExpenseController::class);

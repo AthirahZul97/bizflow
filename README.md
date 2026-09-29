@@ -21,6 +21,7 @@ Every business record belongs to one user. Users only ever see and change their 
 | Vite | 7 | Via `laravel-vite-plugin`. |
 | PHPUnit | 11.5 | Laravel's standard test setup (not Pest). |
 | `brick/math` | 0.14 | Exact decimal arithmetic for money. |
+| `barryvdh/laravel-dompdf` / `dompdf/dompdf` | 3.1.2 / **3.1.6** | Invoice PDF download. DomPDF is pinned to `^3.1.6`, which fixes the security advisories affecting 3.1.5 and earlier. |
 
 Other versions may work but have not been verified.
 
@@ -55,6 +56,10 @@ Other versions may work but have not been verified.
 - "Paid" is a manual, full-payment flag with a payment date. There are no payment records.
 - Overdue is calculated (issued and past the due date), never stored.
 - Printable invoice view (browser print).
+- **Download PDF** for issued, paid and cancelled invoices (`GET /invoices/{invoice}/pdf`, saved as
+  e.g. `INV-00001.pdf`). Drafts have no PDF; cancelled PDFs are clearly marked `CANCELLED`. The PDF
+  uses only the details copied onto the invoice and is rendered by DomPDF with remote access, PHP and
+  JavaScript disabled and file access limited to its bundled fonts.
 
 ### Expenses
 - Create, view, edit and delete expenses with a date, one of 13 fixed categories,
@@ -219,7 +224,7 @@ These are outside the MVP by design, not bugs:
 - Inventory / stock, payroll, HR, point of sale
 - Double-entry accounting, formal financial statements (P&L, balance sheet, cash flow), reconciliation
 - Tax filing, e-invoicing, payment gateways, partial payments
-- CSV / Excel exports, PDF generation, emailed or scheduled reports, recurring invoices
+- CSV / Excel exports, PDF reports, emailed invoices or reports, scheduled reports, recurring invoices
 - Multi-currency (amounts are recorded in MYR)
 - REST API, mobile app, WhatsApp API, AI chatbot
 

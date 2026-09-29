@@ -72,6 +72,15 @@ class InvoicePolicy
     }
 
     /**
+     * Issued, paid and cancelled invoices have a PDF; drafts have no number yet.
+     */
+    public function downloadPdf(User $user, Invoice $invoice): Response
+    {
+        return $this->ownsWithStatus($user, $invoice, ! $invoice->status->isDraft(),
+            'Draft invoices don’t have a PDF. Issue the invoice first.');
+    }
+
+    /**
      * The invoice is in the given state and InvoiceStatus allows the move.
      */
     private function canMove(Invoice $invoice, InvoiceStatus $from, InvoiceStatus $to): bool

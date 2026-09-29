@@ -28,6 +28,10 @@
                 </form>
             @endif
 
+            @unless ($invoice->status->isDraft())
+                <a href="{{ route('invoices.pdf', $invoice) }}" class="btn btn-outline-secondary" data-download-pdf>Download PDF</a>
+            @endunless
+
             <button type="button" class="btn btn-outline-secondary" data-print>Print</button>
         </div>
     </div>
