@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ProductType;
+use App\Support\Money;
 use Database\Factories\ProductFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -133,18 +134,12 @@ class Product extends Model
     /**
      * Format a price attribute for display, e.g. "RM 1,500.00".
      *
-     * Works on the exact decimal string so no floating point is involved.
+     * Delegates to the shared formatter; a missing (nullable) price returns null.
      */
     public function money(string $attribute): ?string
     {
         $amount = $this->getAttribute($attribute);
 
-        if ($amount === null) {
-            return null;
-        }
-
-        [$whole, $fraction] = explode('.', $amount);
-
-        return config('bizflow.currency.symbol').' '.number_format((int) $whole).'.'.$fraction;
+        return $amount === null ? null : Money::format($amount);
     }
 }

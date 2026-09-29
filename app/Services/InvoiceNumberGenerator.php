@@ -15,12 +15,18 @@ class InvoiceNumberGenerator
      * Must run inside a transaction: the owner's row is locked so concurrent
      * issues for the same user are serialized. The unique (user_id,
      * invoice_sequence) and (user_id, invoice_number) indexes are the backstop.
-     * Numbers are never reused because issued invoices cannot be deleted.
+     * Numbers are never reused because issued invoices cannot be deleted, and an
+     * invoice that already has a number is refused.
      */
     public function assign(Invoice $invoice): void
     {
         if (DB::transactionLevel() === 0) {
             throw new LogicException('Invoice numbers must be assigned inside a database transaction.');
+        }
+
+        // An issued number never changes, so an invoice that already has one is never renumbered.
+        if ($invoice->invoice_sequence !== null || $invoice->invoice_number !== null) {
+            throw new LogicException('This invoice already has a number and cannot be renumbered.');
         }
 
         $user = User::query()->whereKey($invoice->user_id)->lockForUpdate()->firstOrFail();

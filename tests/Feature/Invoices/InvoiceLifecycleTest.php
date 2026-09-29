@@ -11,6 +11,8 @@ use App\Services\InvoiceNumberGenerator;
 use App\Services\InvoiceService;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use LogicException;
 use Tests\TestCase;
 
 class InvoiceLifecycleTest extends TestCase
@@ -146,6 +148,104 @@ class InvoiceLifecycleTest extends TestCase
             $this->assertSame(1, Invoice::whereNotNull('invoice_number')->count());
             $this->assertSame('INV-00001', $stale->fresh()->invoice_number);
         }
+    }
+
+    /**
+     * The persisted lifecycle and numbering columns, for before/after comparisons.
+     *
+     * @return array<string, mixed>
+     */
+    private function lifecycleState(Invoice $invoice): array
+    {
+        return array_intersect_key(
+            $invoice->fresh()->getAttributes(),
+            array_flip(['status', 'invoice_number', 'invoice_sequence', 'issued_at', 'paid_at', 'cancelled_at', 'total']),
+        );
+    }
+
+    public function test_a_stale_issue_cannot_reissue_an_invoice_that_was_issued_and_paid(): void
+    {
+        $user = User::factory()->create();
+        $service = app(InvoiceService::class);
+        $invoice = $this->draftFor($user);
+        $stale = $invoice->fresh(); // loaded while still a draft
+
+        $service->issue($invoice);
+        $service->markPaid($invoice->fresh(), '2026-09-15');
+        $before = $this->lifecycleState($invoice);
+
+        try {
+            $service->issue($stale);
+            $this->fail('A stale issue of a paid invoice was accepted.');
+        } catch (InvoiceStateException $e) {
+            $this->assertSame('Only draft invoices can be issued.', $e->getMessage());
+        }
+
+        $this->assertSame($before, $this->lifecycleState($invoice));
+        $this->assertSame('paid', $before['status']);
+        $this->assertSame('INV-00001', $before['invoice_number']);
+        $this->assertNotNull($before['paid_at']);
+
+        // No number was consumed: the next invoice still gets INV-00002.
+        $this->assertSame('INV-00002', $this->issuedFor($user)->invoice_number);
+    }
+
+    public function test_a_stale_issue_cannot_reissue_an_invoice_that_was_issued_and_cancelled(): void
+    {
+        $user = User::factory()->create();
+        $service = app(InvoiceService::class);
+        $invoice = $this->draftFor($user);
+        $stale = $invoice->fresh();
+
+        $service->issue($invoice);
+        $service->cancel($invoice->fresh());
+        $before = $this->lifecycleState($invoice);
+
+        $this->expectException(InvoiceStateException::class);
+
+        try {
+            $service->issue($stale);
+        } finally {
+            $this->assertSame($before, $this->lifecycleState($invoice));
+            $this->assertSame('cancelled', $before['status']);
+            $this->assertSame('INV-00001', $before['invoice_number']);
+            $this->assertSame(1, (int) $user->invoices()->max('invoice_sequence'));
+        }
+    }
+
+    public function test_the_number_generator_refuses_an_invoice_that_already_has_a_number(): void
+    {
+        $issued = $this->issuedFor(User::factory()->create());
+
+        try {
+            DB::transaction(fn () => app(InvoiceNumberGenerator::class)->assign($issued));
+            $this->fail('An already-numbered invoice was renumbered.');
+        } catch (LogicException $e) {
+            $this->assertSame('This invoice already has a number and cannot be renumbered.', $e->getMessage());
+        }
+
+        $this->assertSame('INV-00001', $issued->invoice_number);
+        $this->assertSame(1, $issued->invoice_sequence);
+        $this->assertSame('INV-00001', $issued->fresh()->invoice_number);
+    }
+
+    public function test_the_normal_lifecycle_still_works_through_the_service(): void
+    {
+        $user = User::factory()->create();
+        $service = app(InvoiceService::class);
+
+        $issued = $service->issue($this->draftFor($user));
+        $this->assertSame([InvoiceStatus::Issued, 'INV-00001'], [$issued->status, $issued->invoice_number]);
+
+        $paid = $service->markPaid($issued, '2026-09-20');
+        $this->assertSame([InvoiceStatus::Paid, 'INV-00001', '2026-09-20'], [$paid->status, $paid->invoice_number, $paid->paid_at->toDateString()]);
+
+        $unpaid = $service->markUnpaid($paid);
+        $this->assertSame([InvoiceStatus::Issued, 'INV-00001', null], [$unpaid->status, $unpaid->invoice_number, $unpaid->paid_at]);
+
+        $cancelled = $service->cancel($unpaid);
+        $this->assertSame([InvoiceStatus::Cancelled, 'INV-00001'], [$cancelled->status, $cancelled->invoice_number]);
+        $this->assertSame(1, (int) $user->invoices()->max('invoice_sequence'));
     }
 
     public function test_issued_invoices_can_be_marked_paid_and_unpaid(): void

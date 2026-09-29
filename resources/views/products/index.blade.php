@@ -5,7 +5,7 @@
 @section('content')
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
         <h1 class="h3 mb-0">Products &amp; Services</h1>
-        <a href="{{ route('products.create') }}" class="btn btn-primary">New item</a>
+        <a href="{{ route('products.create') }}" class="btn btn-primary">New product or service</a>
     </div>
 
     <form method="GET" action="{{ route('products.index') }}" class="row g-2 mb-3" role="search">
@@ -30,10 +30,12 @@
         </div>
         <div class="col-md-2 d-flex gap-2">
             <button type="submit" class="btn btn-outline-secondary flex-grow-1">Filter</button>
-            @if ($filtered)
-                <a href="{{ route('products.index') }}" class="btn btn-outline-secondary">Clear</a>
-            @endif
         </div>
+        @if ($filtered)
+            <div class="col-12">
+                <a href="{{ route('products.index') }}" class="small">Clear filters</a>
+            </div>
+        @endif
     </form>
 
     @if ($products->isEmpty())
@@ -44,7 +46,7 @@
                     <a href="{{ route('products.index') }}" class="btn btn-outline-secondary">Clear filters</a>
                 @else
                     <p class="mb-3">You haven't added any products or services yet.</p>
-                    <a href="{{ route('products.create') }}" class="btn btn-primary">Add your first product or service</a>
+                    <a href="{{ route('products.create') }}" class="btn btn-primary">Create your first product or service</a>
                 @endif
             </div>
         </div>

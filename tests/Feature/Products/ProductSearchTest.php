@@ -190,7 +190,7 @@ class ProductSearchTest extends TestCase
         $this->actingAs(User::factory()->create())->get(route('products.index'))
             ->assertOk()
             ->assertSee("You haven't added any products or services yet.", false)
-            ->assertSee('Add your first product or service');
+            ->assertSee('Create your first product or service');
     }
 
     public function test_empty_state_is_shown_when_filters_have_no_matches(): void

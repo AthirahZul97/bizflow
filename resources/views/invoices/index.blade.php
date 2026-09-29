@@ -23,10 +23,12 @@
         </div>
         <div class="col-md-2 d-flex gap-2">
             <button type="submit" class="btn btn-outline-secondary flex-grow-1">Filter</button>
-            @if ($filtered)
-                <a href="{{ route('invoices.index') }}" class="btn btn-outline-secondary">Clear</a>
-            @endif
         </div>
+        @if ($filtered)
+            <div class="col-12">
+                <a href="{{ route('invoices.index') }}" class="small">Clear filters</a>
+            </div>
+        @endif
     </form>
 
     @if ($invoices->isEmpty())

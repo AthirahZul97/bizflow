@@ -12,11 +12,11 @@
         <div class="input-group">
             <input type="search" name="search" value="{{ $search }}" class="form-control"
                    placeholder="Search by name, company, email or phone" aria-label="Search customers" maxlength="100">
-            <button type="submit" class="btn btn-outline-secondary">Search</button>
-            @if ($search !== '')
-                <a href="{{ route('customers.index') }}" class="btn btn-outline-secondary">Clear</a>
-            @endif
+            <button type="submit" class="btn btn-outline-secondary">Filter</button>
         </div>
+        @if ($search !== '')
+            <a href="{{ route('customers.index') }}" class="small d-inline-block mt-2">Clear filters</a>
+        @endif
     </form>
 
     @if ($customers->isEmpty())
@@ -24,7 +24,7 @@
             <div class="card-body text-center py-5">
                 @if ($search !== '')
                     <p class="mb-3">No customers match &ldquo;{{ $search }}&rdquo;.</p>
-                    <a href="{{ route('customers.index') }}" class="btn btn-outline-secondary">Clear search</a>
+                    <a href="{{ route('customers.index') }}" class="btn btn-outline-secondary">Clear filters</a>
                 @else
                     <p class="mb-3">You haven't added any customers yet.</p>
                     <a href="{{ route('customers.create') }}" class="btn btn-primary">Create your first customer</a>

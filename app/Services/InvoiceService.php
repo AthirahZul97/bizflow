@@ -80,6 +80,11 @@ class InvoiceService
     {
         return DB::transaction(function () use ($invoice) {
             $invoice = $this->lockedFresh($invoice);
+
+            // Issuing needs a draft specifically: paid → issued is also a valid transition
+            // (mark unpaid), so the transition check alone would let a stale request re-issue
+            // an invoice that was issued and paid after it was loaded.
+            $this->ensureStatus($invoice, InvoiceStatus::Draft, 'Only draft invoices can be issued.');
             $this->ensureTransition($invoice, InvoiceStatus::Issued, 'Only draft invoices can be issued.');
 
             $items = $invoice->items()->get();
