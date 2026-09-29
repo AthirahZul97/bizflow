@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Enums\ExpenseCategory;
 use App\Enums\InvoiceStatus;
 use App\Models\User;
-use App\Support\DashboardPeriod;
+use App\Support\Money;
+use App\Support\ReportingPeriod;
+use App\Support\SqlMonth;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use Carbon\CarbonImmutable;
@@ -45,7 +47,7 @@ class DashboardService
     /**
      * @return array<string, mixed>
      */
-    public function summary(User $user, DashboardPeriod $period): array
+    public function summary(User $user, ReportingPeriod $period): array
     {
         $today = today()->toImmutable();
         $todayDate = $today->toDateString();
@@ -191,7 +193,7 @@ class DashboardService
      *
      * @return list<array{category: ExpenseCategory, amount: string, percent: int}>
      */
-    private function categoryBreakdown(User $user, DashboardPeriod $period, string $periodTotal): array
+    private function categoryBreakdown(User $user, ReportingPeriod $period, string $periodTotal): array
     {
         $total = BigDecimal::of($periodTotal);
 
@@ -255,17 +257,14 @@ class DashboardService
     /**
      * Sum a column per calendar month (keyed "Y-m") in [$start, $end).
      *
-     * The month expression is the only driver-specific SQL in the dashboard; it is
-     * a constant chosen by driver, never built from input.
+     * The driver-specific month expression comes from SqlMonth; $dateColumn is an
+     * internal constant, never request input.
      *
      * @return array<string, string>
      */
     private function monthlySums(HasMany $query, string $dateColumn, string $amountColumn, string $start, string $end): array
     {
-        $month = match ($query->getConnection()->getDriverName()) {
-            'sqlite' => "strftime('%Y-%m', {$dateColumn})",
-            default => "DATE_FORMAT({$dateColumn}, '%Y-%m')",
-        };
+        $month = SqlMonth::expression($query->getConnection()->getDriverName(), $dateColumn);
 
         return $query
             ->where($dateColumn, '>=', $start)
@@ -279,11 +278,10 @@ class DashboardService
     }
 
     /**
-     * Normalise a SQL SUM to an exact two-decimal string. MySQL returns an exact
-     * decimal string; SQLite (tests) may return a float, which is rounded once here.
+     * Normalise a SQL SUM to an exact two-decimal string (see Money::fromSql()).
      */
     private function decimal(mixed $value): string
     {
-        return (string) BigDecimal::of((string) ($value ?? '0'))->toScale(2, RoundingMode::HALF_UP);
+        return Money::fromSql($value);
     }
 }

@@ -73,6 +73,29 @@ class MoneyTest extends TestCase
         $this->assertSame('RM 0.50', $this->previousFormat('-0.50'));
     }
 
+    /**
+     * @return array<string, array{mixed, string}>
+     */
+    public static function sqlValues(): array
+    {
+        return [
+            'null (no rows)' => [null, '0.00'],
+            'integer zero' => [0, '0.00'],
+            'mysql exact string' => ['19999999999999.98', '19999999999999.98'],
+            'short string' => ['1500.5', '1500.50'],
+            'sqlite float noise' => [0.1 + 0.2, '0.30'],
+            'sqlite float' => [1500.5, '1500.50'],
+            'negative' => ['-0.5', '-0.50'],
+            'half up' => ['0.005', '0.01'],
+        ];
+    }
+
+    #[DataProvider('sqlValues')]
+    public function test_sql_aggregates_are_normalised_to_exact_two_decimal_strings(mixed $value, string $expected): void
+    {
+        $this->assertSame($expected, Money::fromSql($value));
+    }
+
     public function test_negative_zero_is_shown_without_a_sign(): void
     {
         $this->assertSame('RM 0.00', Money::format('-0.00'));

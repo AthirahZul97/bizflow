@@ -129,6 +129,15 @@ class DashboardTest extends TestCase
         }
     }
 
+    public function test_dashboard_does_not_offer_or_accept_last_year(): void
+    {
+        $this->dashboard()->assertDontSee('Last year');
+
+        $this->dashboard(['period' => 'last_year'])
+            ->assertSee('Showing 1–29 Sep 2026.')
+            ->assertSee("That date range wasn't valid, so this month is shown.", false);
+    }
+
     // ---------------------------------------------------------------- money in
 
     public function test_received_uses_paid_at_and_only_paid_invoices(): void

@@ -2,6 +2,9 @@
 
 namespace App\Support;
 
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
+
 class Money
 {
     /**
@@ -25,5 +28,17 @@ class Money
         $isZero = trim($whole.$fraction, '0') === '';
 
         return $negative && ! $isZero ? '-'.$formatted : $formatted;
+    }
+
+    /**
+     * Normalise a SQL aggregate (e.g. SUM) to an exact two-decimal string.
+     *
+     * MySQL returns an exact decimal string; SQLite may return a float or an
+     * integer. The value is converted to a string before BigDecimal, then rounded
+     * once, half up, to 2 decimal places. NULL (no rows) becomes "0.00".
+     */
+    public static function fromSql(mixed $value): string
+    {
+        return (string) BigDecimal::of((string) ($value ?? '0'))->toScale(2, RoundingMode::HALF_UP);
     }
 }

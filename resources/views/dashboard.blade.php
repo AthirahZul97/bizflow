@@ -9,11 +9,14 @@
             <p class="mb-0">Welcome, <strong>{{ Auth::user()->name }}</strong>.
                 <span class="text-body-secondary">Showing {{ $period->label() }}.</span></p>
         </div>
-        @include('dashboard._period')
+        @include('partials._period-selector', [
+            'periodRoute' => 'dashboard',
+            'periodPresets' => \App\Support\ReportingPeriod::DASHBOARD_PRESETS,
+        ])
     </div>
 
     @if ($period->fellBack)
-        <div class="alert alert-warning py-2">That date range wasn't valid, so this month is shown.</div>
+        <div class="alert alert-warning py-2">That date range wasn't valid, so {{ $period->defaultLabel() }} is shown.</div>
     @endif
 
     @if ($isNewAccount)
