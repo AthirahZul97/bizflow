@@ -86,6 +86,19 @@ class InvoicePolicy
     /**
      * The invoice is in the given state and InvoiceStatus allows the move.
      */
+    /**
+     * Issued and paid invoices can be emailed; drafts and cancelled invoices cannot.
+     */
+    public function sendEmail(User $user, Invoice $invoice): Response
+    {
+        if ($invoice->status->isCancelled()) {
+            return $this->ownsWithStatus($user, $invoice, false, 'Cancelled invoices can’t be emailed.');
+        }
+
+        return $this->ownsWithStatus($user, $invoice, ! $invoice->status->isDraft(),
+            'Draft invoices can’t be emailed. Issue the invoice first.');
+    }
+
     private function canMove(Invoice $invoice, InvoiceStatus $from, InvoiceStatus $to): bool
     {
         return $invoice->status === $from && $from->canTransitionTo($to);

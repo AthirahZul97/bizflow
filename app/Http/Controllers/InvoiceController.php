@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\InvoiceEmailStatus;
 use App\Http\Requests\InvoiceRequest;
 use App\Models\Invoice;
 use App\Services\InvoiceService;
@@ -52,6 +53,8 @@ class InvoiceController extends Controller implements HasMiddleware
         $invoices = $this->currentBusiness->get()->invoices()
             ->search($search)
             ->when($status, fn ($query) => $query->filterStatus($status))
+            // When each invoice was last emailed successfully, in one subquery.
+            ->withMax(['emails as last_emailed_at' => fn ($query) => $query->where('status', InvoiceEmailStatus::Sent)], 'sent_at')
             ->orderByDesc('issue_date')
             ->orderByDesc('id')
             ->paginate(15)
@@ -91,7 +94,11 @@ class InvoiceController extends Controller implements HasMiddleware
      */
     public function show(Invoice $invoice): View
     {
-        $invoice->load(['items', 'business']);
+        $invoice->load([
+            'items',
+            'business',
+            'emails' => fn ($query) => $query->with('requester:id,name')->latest('id'),
+        ]);
 
         return view('invoices.show', compact('invoice'));
     }

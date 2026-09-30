@@ -8,6 +8,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\InvoiceEmailController;
 use App\Http\Controllers\InvoicePdfController;
 use App\Http\Controllers\InvoiceStatusController;
 use App\Http\Controllers\ProductController;
@@ -48,6 +49,10 @@ Route::middleware('auth')->group(function () {
         Route::get('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'confirmCancel'])->name('invoices.cancel.confirm');
         Route::post('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'cancel'])->name('invoices.cancel');
         Route::get('/invoices/{invoice}/pdf', InvoicePdfController::class)->name('invoices.pdf');
+        Route::get('/invoices/{invoice}/email', [InvoiceEmailController::class, 'create'])->name('invoices.email.create');
+        Route::post('/invoices/{invoice}/email', [InvoiceEmailController::class, 'store'])
+            ->middleware('throttle:6,1')
+            ->name('invoices.email.store');
 
         Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
         Route::resource('expenses', ExpenseController::class);

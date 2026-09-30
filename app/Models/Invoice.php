@@ -66,6 +66,8 @@ class Invoice extends Model
             'paid_at' => 'date',
             'issued_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            // Only present when loaded with withMax() on the invoice list.
+            'last_emailed_at' => 'datetime',
             'subtotal' => 'decimal:2',
             'discount_amount' => 'decimal:2',
             'tax_rate' => 'decimal:2',
@@ -104,6 +106,17 @@ class Invoice extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * The invoice's email send history. Unordered, so it is safe in aggregate
+     * subqueries; order it where it is listed.
+     *
+     * @return HasMany<InvoiceEmail, $this>
+     */
+    public function emails(): HasMany
+    {
+        return $this->hasMany(InvoiceEmail::class);
     }
 
     /**

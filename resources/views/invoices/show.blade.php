@@ -28,6 +28,10 @@
                 </form>
             @endif
 
+            @if ($invoice->status->isIssued() || $invoice->status->isPaid())
+                <a href="{{ route('invoices.email.create', $invoice) }}" class="btn btn-outline-primary" data-email-invoice>Email invoice</a>
+            @endif
+
             @unless ($invoice->status->isDraft())
                 <a href="{{ route('invoices.pdf', $invoice) }}" class="btn btn-outline-secondary" data-download-pdf>Download PDF</a>
             @endunless
@@ -168,4 +172,6 @@
             @endif
         </div>
     </div>
+
+    @include('invoices._email-history')
 @endsection

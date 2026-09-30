@@ -8,8 +8,8 @@ Every business record belongs to one **business** (the tenant). A user works in 
 and only ever sees and changes that business's data.
 
 > **Status:** MVP complete: Authentication, Customers, Products / Services, Invoices,
-> Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download and the business
-> tenancy foundation with a business profile. See [Known limitations and future scope](#known-limitations-and-future-scope).
+> Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download, the business
+> tenancy foundation with a business profile, and emailing invoices. See [Known limitations and future scope](#known-limitations-and-future-scope).
 
 ## Tech stack
 
@@ -71,6 +71,14 @@ Other versions may work but have not been verified.
   e.g. `INV-00001.pdf`). Drafts have no PDF; cancelled PDFs are clearly marked `CANCELLED`. The PDF
   uses the details copied onto the invoice plus the business profile, and is rendered by DomPDF with remote access, PHP and
   JavaScript disabled and file access limited to its bundled fonts.
+- **Email invoice** for issued and paid invoices (drafts and cancelled invoices cannot be emailed).
+  The user picks the address: the one copied onto the invoice, or the customer's current address
+  when it has changed since. There is no free-text address or message. The email is queued and sent
+  by the queue worker with the invoice PDF (rendered at send time) attached. It comes from the
+  platform address (`MAIL_FROM_ADDRESS`) with the business name as the display name, and replies go
+  to the business email when the profile has one. Every send is kept in the invoice's **email
+  history** (queued, sending, sent, failed or not sent, with the reason), and the invoice list shows
+  when an invoice was last emailed. Emailing never changes the invoice.
 
 ### Expenses
 - Create, view, edit and delete expenses with a date, one of 13 fixed categories,
@@ -154,6 +162,24 @@ The move from per-user to per-business ownership is a staged migration (`2026_09
 verified before any destructive step, and then the keys are rebuilt. The last two migrations
 cannot be rolled back; the recovery path is restoring a backup taken before migrating.
 
+### Invoice emails
+- One row per send request in `invoice_emails`, owned through the invoice (no `business_id`).
+  `requested_by` is audit metadata only; `NULL` means system-generated.
+- The request is recorded and the `SendInvoiceEmail` job queued in one transaction; the job
+  (`ShouldQueueAfterCommit`) is only queued if that transaction commits, and carries only the row ID.
+- Only one send per invoice can be in flight. A send only happens when the job moves its row from
+  `queued` to `sending` with a conditional update, so a row is never sent twice, and the job re-checks
+  that the invoice is still issued or paid (a send for an invoice cancelled in the meantime is
+  recorded as not sent). A send still queued after 15 minutes (for example because no worker is
+  running) can be replaced: it is first marked "Superseded" in the same way, so its job can never
+  send. A send that is already `sending` is never replaced.
+- Failures: an invalid address or an SMTP 550/551/553 rejection fails at once; everything else is
+  retried (3 attempts, after 1 and 5 minutes) before being marked failed. A send interrupted mid-way
+  is marked failed rather than retried, because it may already have been delivered. Failed sends can
+  be sent again.
+- Limits: 6 send requests a minute per user, 30 invoice emails an hour per business, and 5 a day
+  (at most one a minute) per invoice.
+
 ### Invoice numbering
 Each business has its own sequence starting at `INV-00001`. Numbers are assigned inside a
 database transaction that locks the business's row, so two invoices issued at the same moment
@@ -224,7 +250,14 @@ These steps assume PHP 8.4 with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `open
     ```
     Open http://127.0.0.1:8000 and register an account.
     `/health` shows an application and database status page (`200` healthy, `503` if the database is unreachable).
-11. **Run the tests** (see below).
+11. **Run the queue worker** (needed for invoice emails; leave it running in its own terminal)
+    ```bash
+    php artisan queue:work --tries=3 --timeout=60
+    ```
+    Invoice emails stay "Queued" until a worker picks them up. With the default `MAIL_MAILER=log`
+    nothing is delivered: each email, including its base64-encoded PDF (customer data), is written
+    to `storage/logs/laravel.log`. Set the `MAIL_*` SMTP settings in `.env` to send real email.
+12. **Run the tests** (see below).
 
 If `php` on your PATH is not PHP 8.4, call the PHP 8.4 binary directly. For example, on the
 Windows machine this project was developed on: `C:\php84\php.exe artisan test`. That path is a
@@ -233,6 +266,12 @@ local example, not a requirement.
 ### Production notes
 For a real deployment, set at least `APP_ENV=production`, `APP_DEBUG=false`, the correct
 `APP_URL`, and `SESSION_SECURE_COOKIE=true` when serving over HTTPS.
+
+Invoice emails need a real mailer (`MAIL_MAILER=smtp` and its settings), a `MAIL_FROM_ADDRESS` on
+a domain you control with SPF, DKIM and DMARC set up, and a queue worker kept running by a process
+supervisor (`php artisan queue:work`, restarted with `php artisan queue:restart` on every deploy).
+On Windows the worker cannot enforce its timeout (no `pcntl`), so an interrupted send is only
+detected when the job is retried after `DB_QUEUE_RETRY_AFTER` (90 seconds).
 
 ## Testing
 
@@ -253,7 +292,7 @@ These are outside the MVP by design, not bugs:
 - Inventory / stock, payroll, HR, point of sale
 - Double-entry accounting, formal financial statements (P&L, balance sheet, cash flow), reconciliation
 - Tax filing, e-invoicing, payment gateways, partial payments
-- CSV / Excel exports, PDF reports, emailed invoices or reports, scheduled reports, recurring invoices
+- CSV / Excel exports, PDF reports, emailed reports, payment reminders, scheduled reports, recurring invoices
 - Multi-currency (amounts are recorded in MYR)
 - REST API, mobile app, WhatsApp API, AI chatbot
 
@@ -266,6 +305,9 @@ Current limitations:
 - Seller details are not copied onto invoices, so editing the business profile also changes the
   seller block of existing invoices and their PDFs.
 - "Paid" means marked as paid in full by the user; there are no payment records.
+- "Sent" means the mail server accepted the email; delivery, bounces and opens are not tracked.
+  Like any queue, a send is at-least-once: if the mail server accepts an email and the worker dies
+  before recording it, the send is marked failed and a duplicate is possible if it is sent again.
 - Reports and the dashboard show invoice totals including tax; tax is not reported separately.
 
 ## Development rules

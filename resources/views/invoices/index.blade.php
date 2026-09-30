@@ -74,7 +74,12 @@
                                 <td class="text-nowrap">{{ $invoice->issue_date->format('d M Y') }}</td>
                                 <td class="text-nowrap">{{ $invoice->due_date->format('d M Y') }}</td>
                                 <td class="text-end text-nowrap">{{ $invoice->money('total') }}</td>
-                                <td>@include('invoices._status-badge')</td>
+                                <td>
+                                    @include('invoices._status-badge')
+                                    @if ($invoice->last_emailed_at)
+                                        <div class="small text-body-secondary text-nowrap" data-emailed>Emailed {{ $invoice->last_emailed_at->format('d M Y') }}</div>
+                                    @endif
+                                </td>
                                 <td class="text-end text-nowrap">
                                     <a href="{{ route('invoices.show', $invoice) }}" class="btn btn-sm btn-outline-secondary">View</a>
                                     @if ($invoice->status->isDraft())
@@ -101,6 +106,9 @@
                     <div class="d-flex flex-wrap align-items-center gap-2 mt-1 small text-body-secondary">
                         @include('invoices._status-badge')
                         <span>Due {{ $invoice->due_date->format('d M Y') }}</span>
+                        @if ($invoice->last_emailed_at)
+                            <span>Emailed {{ $invoice->last_emailed_at->format('d M Y') }}</span>
+                        @endif
                     </div>
                 </a>
             @endforeach

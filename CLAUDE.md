@@ -7,9 +7,9 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
 
 - All MVP modules are complete: Authentication, Customers, Products / Services, Invoices,
   Expenses, Dashboard and Reports.
-- Phase 2 so far: invoice PDF download, and Phase 2A: the business tenancy
-  foundation with a business profile. Next approved phases: 2B Email Invoice, 2C Recurring
-  Invoices, 2D Commercial SaaS.
+- Phase 2 so far: invoice PDF download; Phase 2A, the business tenancy foundation with a
+  business profile; Phase 2B, emailing invoices (queued, with send history). Next approved
+  phases: 2C Recurring Invoices, 2D Commercial SaaS.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
@@ -41,9 +41,21 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   `(business_id, invoice_number)` / `(business_id, invoice_sequence)` indexes back it up.
 - **Tests:** every module includes cross-business isolation tests (list, view, update, delete,
   forged IDs and forged `business_id`).
+- **Records owned through a parent** (invoice items, invoice emails) have no `business_id`; reach
+  them only through an already-authorized parent (`$invoice->emails()`). Audit columns such as
+  `invoice_emails.requested_by` follow the `created_by` rule: `NULL` means system-generated, never
+  ownership.
 - **Migrations that change tenancy or other schema destructively** are rehearsed on a scratch
   database with a fresh backup first; restoring the backup is the recovery of record, not
   `migrate:rollback`.
+
+## Queued work
+
+- Use Laravel's database queue; no Redis/Horizon. Jobs carry only IDs, re-read and re-check state
+  when they run, and implement `ShouldQueueAfterCommit` when dispatched inside a transaction.
+- Every side effect has a tracking row whose state changes are conditional updates
+  (`where status = ...`), so a retried or duplicated job can never repeat the side effect.
+- Retry only failures that may be temporary; when unsure, retry rather than fail.
 
 ## Conventions
 
