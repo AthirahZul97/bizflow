@@ -5,6 +5,7 @@ namespace Tests\Feature\Expenses;
 use App\Enums\ExpenseCategory;
 use App\Models\Expense;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -39,7 +40,7 @@ class ExpenseManagementTest extends TestCase
     public function test_index_lists_only_the_users_own_expenses(): void
     {
         $user = User::factory()->create();
-        Expense::factory()->for($user)->create(['description' => 'My Electricity Bill']);
+        Expense::factory()->ownedBy($user)->create(['description' => 'My Electricity Bill']);
         Expense::factory()->create(['description' => 'Their Electricity Bill']);
 
         $this->actingAs($user)->get(route('expenses.index'))
@@ -69,7 +70,8 @@ class ExpenseManagementTest extends TestCase
         $expense = Expense::sole();
         $response->assertRedirect(route('expenses.show', $expense));
         $response->assertSessionHas('status', 'Expense recorded.');
-        $this->assertTrue($expense->user->is($user));
+        $this->assertTrue($expense->business->is($this->businessOf($user)));
+        $this->assertTrue($expense->creator->is($user));
         $this->assertSame('2026-09-15', $expense->expense_date->toDateString());
         $this->assertSame(ExpenseCategory::Rent, $expense->category);
         $this->assertSame('2500.00', $expense->amount);
@@ -99,7 +101,7 @@ class ExpenseManagementTest extends TestCase
     {
         $expense = Expense::factory()->create(['description' => 'Old']);
 
-        $response = $this->actingAs($expense->user)->put(
+        $response = $this->actingAs($this->ownerOf($expense))->put(
             route('expenses.update', $expense),
             $this->validPayload(['description' => 'New', 'amount' => '99.9', 'category' => 'software']),
         );
@@ -116,7 +118,7 @@ class ExpenseManagementTest extends TestCase
     {
         $expense = Expense::factory()->create(['description' => 'Printer ink', 'amount' => '45.50', 'expense_date' => '2026-08-03']);
 
-        $this->actingAs($expense->user)->get(route('expenses.edit', $expense))
+        $this->actingAs($this->ownerOf($expense))->get(route('expenses.edit', $expense))
             ->assertOk()
             ->assertSee('value="Printer ink"', false)
             ->assertSee('value="45.50"', false)
@@ -127,7 +129,7 @@ class ExpenseManagementTest extends TestCase
     {
         $expense = Expense::factory()->create(['description' => 'Keep Me']);
 
-        $this->actingAs($expense->user)
+        $this->actingAs($this->ownerOf($expense))
             ->from(route('expenses.edit', $expense))
             ->put(route('expenses.update', $expense), $this->validPayload(['description' => '', 'amount' => '-1']))
             ->assertRedirect(route('expenses.edit', $expense))
@@ -136,18 +138,21 @@ class ExpenseManagementTest extends TestCase
         $this->assertSame('Keep Me', $expense->fresh()->description);
     }
 
-    public function test_forged_user_id_is_ignored(): void
+    public function test_forged_business_id_and_created_by_are_ignored(): void
     {
         $user = User::factory()->create();
         $victim = User::factory()->create();
+        $forged = ['business_id' => $this->businessOf($victim)->id, 'created_by' => $victim->id, 'user_id' => $victim->id];
 
-        $this->actingAs($user)->post(route('expenses.store'), $this->validPayload(['user_id' => $victim->id]));
+        $this->actingAs($user)->post(route('expenses.store'), $this->validPayload($forged));
         $expense = Expense::sole();
-        $this->assertSame($user->id, $expense->user_id);
+        $this->assertSame($this->businessOf($user)->id, $expense->business_id);
+        $this->assertSame($user->id, $expense->created_by);
 
-        $this->actingAs($user)->put(route('expenses.update', $expense), $this->validPayload(['user_id' => $victim->id]));
-        $this->assertSame($user->id, $expense->fresh()->user_id);
-        $this->assertSame(0, $victim->expenses()->count());
+        $this->actingAs($user)->put(route('expenses.update', $expense), $this->validPayload($forged));
+        $this->assertSame($this->businessOf($user)->id, $expense->fresh()->business_id);
+        $this->assertSame($user->id, $expense->fresh()->created_by);
+        $this->assertSame(0, $this->businessOf($victim)->expenses()->count());
     }
 
     public function test_id_and_timestamps_cannot_be_mass_assigned(): void
@@ -287,7 +292,7 @@ class ExpenseManagementTest extends TestCase
             'payee' => '<i>Italic Landlord</i>',
             'notes' => "<script>alert('x')</script>\nSecond line",
         ]);
-        $user = $expense->user;
+        $user = $this->ownerOf($expense);
 
         $this->actingAs($user)->get(route('expenses.show', $expense))
             ->assertDontSee('<b>Bold Rent</b>', false)
@@ -313,7 +318,7 @@ class ExpenseManagementTest extends TestCase
             'description' => 'Still Here', 'amount' => '120.00', 'expense_date' => '2026-09-01',
         ]);
 
-        $response = $this->actingAs($expense->user)->get(route('expenses.delete', $expense));
+        $response = $this->actingAs($this->ownerOf($expense))->get(route('expenses.delete', $expense));
 
         $response->assertOk();
         $response->assertSee('Still Here');
@@ -329,21 +334,31 @@ class ExpenseManagementTest extends TestCase
     {
         $expense = Expense::factory()->create();
 
-        $response = $this->actingAs($expense->user)->delete(route('expenses.destroy', $expense));
+        $response = $this->actingAs($this->ownerOf($expense))->delete(route('expenses.destroy', $expense));
 
         $response->assertRedirect(route('expenses.index'));
         $response->assertSessionHas('status', 'Expense deleted.');
         $this->assertModelMissing($expense);
     }
 
-    public function test_deleting_a_user_deletes_their_expenses(): void
+    public function test_deleting_the_business_owner_is_blocked_and_keeps_the_expenses(): void
     {
         $expense = Expense::factory()->create();
-        $untouched = Expense::factory()->create();
 
-        $expense->user->delete();
+        $this->assertThrows(fn () => $this->ownerOf($expense)->delete(), QueryException::class);
 
-        $this->assertModelMissing($expense);
-        $this->assertModelExists($untouched);
+        $this->assertModelExists($expense);
+    }
+
+    public function test_deleting_the_creator_keeps_the_expense_and_clears_created_by(): void
+    {
+        // A creator who is no longer a member (the membership would otherwise block the delete).
+        $creator = User::factory()->withoutBusiness()->create();
+        $expense = Expense::factory()->create(['created_by' => $creator->id]);
+
+        $creator->delete();
+
+        $this->assertModelExists($expense);
+        $this->assertNull($expense->fresh()->created_by);
     }
 }

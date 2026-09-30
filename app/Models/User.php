@@ -5,7 +5,7 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -49,42 +49,19 @@ class User extends Authenticatable
     }
 
     /**
-     * Get the customers owned by the user.
+     * Get the businesses the user belongs to, with their role.
      *
-     * @return HasMany<Customer, $this>
-     */
-    public function customers(): HasMany
-    {
-        return $this->hasMany(Customer::class);
-    }
-
-    /**
-     * Get the products and services owned by the user.
+     * Users deliberately have no customers(), products(), invoices() or expenses()
+     * relationships: business data is owned by a business and must be queried
+     * from it (see App\Support\CurrentBusiness).
      *
-     * @return HasMany<Product, $this>
+     * @return BelongsToMany<Business, $this, BusinessMembership>
      */
-    public function products(): HasMany
+    public function businesses(): BelongsToMany
     {
-        return $this->hasMany(Product::class);
-    }
-
-    /**
-     * Get the invoices owned by the user.
-     *
-     * @return HasMany<Invoice, $this>
-     */
-    public function invoices(): HasMany
-    {
-        return $this->hasMany(Invoice::class);
-    }
-
-    /**
-     * Get the expenses recorded by the user.
-     *
-     * @return HasMany<Expense, $this>
-     */
-    public function expenses(): HasMany
-    {
-        return $this->hasMany(Expense::class);
+        return $this->belongsToMany(Business::class)
+            ->using(BusinessMembership::class)
+            ->withPivot('id', 'role')
+            ->withTimestamps();
     }
 }

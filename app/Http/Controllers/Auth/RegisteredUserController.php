@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\RegisterRequest;
-use App\Models\User;
+use App\Services\BusinessRegistration;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\View\View;
@@ -20,13 +20,14 @@ class RegisteredUserController extends Controller
     }
 
     /**
-     * Register a new user and log them in.
+     * Register a new user with their business and log them in.
      *
-     * The password is hashed by the User model's "hashed" cast.
+     * The user, business and owner membership are created in one transaction;
+     * the user is only logged in once all three exist.
      */
-    public function store(RegisterRequest $request): RedirectResponse
+    public function store(RegisterRequest $request, BusinessRegistration $registration): RedirectResponse
     {
-        $user = User::create($request->safe()->only(['name', 'email', 'password']));
+        $user = $registration->register($request->safe()->only(['name', 'email', 'password', 'business_name']));
 
         Auth::login($user);
 

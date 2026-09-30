@@ -3,31 +3,35 @@
 namespace App\Http\Controllers;
 
 use App\Services\ReportService;
+use App\Support\CurrentBusiness;
 use App\Support\ReportingPeriod;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 /**
- * Read-only reports for the authenticated user. Only period, from, to, view,
+ * Read-only reports for the current business. Only period, from, to, view,
  * status and page are read from the query string; ownership always comes from
- * $request->user(), never from a parameter.
+ * CurrentBusiness, never from a parameter.
  */
 class ReportController extends Controller
 {
-    public function __construct(private readonly ReportService $reports) {}
+    public function __construct(
+        private readonly ReportService $reports,
+        private readonly CurrentBusiness $currentBusiness,
+    ) {}
 
     public function summary(Request $request): View
     {
         $period = $this->period($request);
 
-        return view('reports.summary', ['period' => $period] + $this->reports->summary($request->user(), $period));
+        return view('reports.summary', ['period' => $period] + $this->reports->summary($this->currentBusiness->get(), $period));
     }
 
     public function customers(Request $request): View
     {
         $period = $this->period($request);
 
-        return view('reports.customers', ['period' => $period] + $this->reports->customers($request->user(), $period));
+        return view('reports.customers', ['period' => $period] + $this->reports->customers($this->currentBusiness->get(), $period));
     }
 
     public function invoices(Request $request): View
@@ -45,14 +49,14 @@ class ReportController extends Controller
             'view' => $view,
             'status' => $status,
             'invoiceQuery' => array_filter(['view' => $view, 'status' => $status]),
-        ] + $this->reports->invoices($request->user(), $period, $view, $status));
+        ] + $this->reports->invoices($this->currentBusiness->get(), $period, $view, $status));
     }
 
     public function expenses(Request $request): View
     {
         $period = $this->period($request);
 
-        return view('reports.expenses', ['period' => $period] + $this->reports->expenses($request->user(), $period));
+        return view('reports.expenses', ['period' => $period] + $this->reports->expenses($this->currentBusiness->get(), $period));
     }
 
     private function period(Request $request): ReportingPeriod

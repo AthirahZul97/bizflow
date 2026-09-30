@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Enums\ExpenseCategory;
 use App\Enums\InvoiceStatus;
-use App\Models\User;
+use App\Models\Business;
 use App\Support\Money;
 use App\Support\ReportingPeriod;
 use App\Support\SqlMonth;
@@ -16,8 +16,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
 
 /**
- * Read-only report aggregates. Every query starts from the user's own invoices()
- * or expenses() relationship; nothing here reads another user's rows.
+ * Read-only report aggregates. Every query starts from the business's own
+ * invoices() or expenses() relationship; nothing here reads another business's rows.
  *
  * The money definitions are the Dashboard's:
  *  - Received:    paid invoices, by paid_at, in the period.
@@ -48,15 +48,15 @@ class ReportService
      *
      * @return array<string, mixed>
      */
-    public function summary(User $user, ReportingPeriod $period): array
+    public function summary(Business $business, ReportingPeriod $period): array
     {
-        $received = $this->countAndSum($this->receivedQuery($user, $period), 'total');
-        $invoiced = $this->countAndSum($this->invoicedQuery($user, $period), 'total');
-        $expenses = $this->countAndSum($this->expensesQuery($user, $period), 'amount');
+        $received = $this->countAndSum($this->receivedQuery($business, $period), 'total');
+        $invoiced = $this->countAndSum($this->invoicedQuery($business, $period), 'total');
+        $expenses = $this->countAndSum($this->expensesQuery($business, $period), 'amount');
 
-        $receivedByMonth = $this->monthly($this->receivedQuery($user, $period), 'paid_at', 'total');
-        $invoicedByMonth = $this->monthly($this->invoicedQuery($user, $period), 'issue_date', 'total');
-        $expensesByMonth = $this->monthly($this->expensesQuery($user, $period), 'expense_date', 'amount');
+        $receivedByMonth = $this->monthly($this->receivedQuery($business, $period), 'paid_at', 'total');
+        $invoicedByMonth = $this->monthly($this->invoicedQuery($business, $period), 'issue_date', 'total');
+        $expensesByMonth = $this->monthly($this->expensesQuery($business, $period), 'expense_date', 'amount');
 
         $empty = ['count' => 0, 'amount' => '0.00'];
         $months = [];
@@ -85,7 +85,7 @@ class ReportService
             'expenses' => $expenses,
             'netCash' => (string) BigDecimal::of($received['amount'])->minus($expenses['amount']),
             'months' => $months,
-            'position' => $this->position($user, today()->toDateString()),
+            'position' => $this->position($business, today()->toDateString()),
         ];
     }
 
@@ -98,7 +98,7 @@ class ReportService
      *
      * @return array{rows: LengthAwarePaginator, names: Collection, totals: array<string, mixed>}
      */
-    public function customers(User $user, ReportingPeriod $period): array
+    public function customers(Business $business, ReportingPeriod $period): array
     {
         $today = today()->toDateString();
         [$start, $end] = [$period->startDate(), $period->endExclusive()];
@@ -116,7 +116,7 @@ class ReportService
             InvoiceStatus::Issued->value, $today,
         ];
 
-        $rows = $this->customerQuery($user, $start, $end)
+        $rows = $this->customerQuery($business, $start, $end)
             ->selectRaw('customer_id, max(id) as latest_invoice_id, '.$sums, $bindings)
             ->groupBy('customer_id')
             ->havingRaw('invoiced_count > 0 or received <> 0 or outstanding <> 0')
@@ -137,12 +137,12 @@ class ReportService
             'overdue' => Money::fromSql($row->overdue),
         ]));
 
-        $names = $user->invoices()
+        $names = $business->invoices()
             ->whereIn('id', $rows->getCollection()->pluck('latest_invoice_id')->all())
             ->get(['id', 'customer_name', 'customer_company_name'])
             ->keyBy('id');
 
-        $totals = $this->customerQuery($user, $start, $end)->selectRaw($sums, $bindings)->toBase()->first();
+        $totals = $this->customerQuery($business, $start, $end)->selectRaw($sums, $bindings)->toBase()->first();
 
         return [
             'rows' => $rows,
@@ -163,14 +163,14 @@ class ReportService
      *
      * @return array<string, mixed>
      */
-    public function invoices(User $user, ReportingPeriod $period, string $view, ?string $status): array
+    public function invoices(Business $business, ReportingPeriod $period, string $view, ?string $status): array
     {
         $today = today()->toImmutable();
 
         $query = match ($view) {
-            'received' => $this->receivedQuery($user, $period),
-            'outstanding' => $user->invoices()->where('status', InvoiceStatus::Issued),
-            default => $this->invoicedQuery($user, $period)->when($status, fn ($query) => match ($status) {
+            'received' => $this->receivedQuery($business, $period),
+            'outstanding' => $business->invoices()->where('status', InvoiceStatus::Issued),
+            default => $this->invoicedQuery($business, $period)->when($status, fn ($query) => match ($status) {
                 'unpaid' => $query->where('status', InvoiceStatus::Issued),
                 'overdue' => $query->filterStatus('overdue'),
                 'paid' => $query->where('status', InvoiceStatus::Paid),
@@ -178,7 +178,7 @@ class ReportService
         };
 
         $totals = $this->countAndSum(clone $query, 'total');
-        $ageing = $view === 'outstanding' ? $this->ageing($user, $today) : null;
+        $ageing = $view === 'outstanding' ? $this->ageing($business, $today) : null;
 
         $invoices = match ($view) {
             'received' => $query->orderByDesc('paid_at')->orderByDesc('id'),
@@ -198,12 +198,12 @@ class ReportService
      *
      * @return array<string, mixed>
      */
-    public function expenses(User $user, ReportingPeriod $period): array
+    public function expenses(Business $business, ReportingPeriod $period): array
     {
-        $totals = $this->countAndSum($this->expensesQuery($user, $period), 'amount');
+        $totals = $this->countAndSum($this->expensesQuery($business, $period), 'amount');
         $total = BigDecimal::of($totals['amount']);
 
-        $byCategory = $this->expensesQuery($user, $period)
+        $byCategory = $this->expensesQuery($business, $period)
             ->groupBy('category')
             ->selectRaw('category, count(*) as aggregate_count, coalesce(sum(amount), 0) as aggregate_amount')
             ->toBase()
@@ -228,25 +228,25 @@ class ReportService
         return ['totals' => $totals, 'categories' => $categories];
     }
 
-    private function receivedQuery(User $user, ReportingPeriod $period): HasMany
+    private function receivedQuery(Business $business, ReportingPeriod $period): HasMany
     {
-        return $user->invoices()
+        return $business->invoices()
             ->where('status', InvoiceStatus::Paid)
             ->where('paid_at', '>=', $period->startDate())
             ->where('paid_at', '<', $period->endExclusive());
     }
 
-    private function invoicedQuery(User $user, ReportingPeriod $period): HasMany
+    private function invoicedQuery(Business $business, ReportingPeriod $period): HasMany
     {
-        return $user->invoices()
+        return $business->invoices()
             ->whereIn('status', [InvoiceStatus::Issued, InvoiceStatus::Paid])
             ->where('issue_date', '>=', $period->startDate())
             ->where('issue_date', '<', $period->endExclusive());
     }
 
-    private function expensesQuery(User $user, ReportingPeriod $period): HasMany
+    private function expensesQuery(Business $business, ReportingPeriod $period): HasMany
     {
-        return $user->expenses()
+        return $business->expenses()
             ->where('expense_date', '>=', $period->startDate())
             ->where('expense_date', '<', $period->endExclusive());
     }
@@ -255,9 +255,9 @@ class ReportService
      * Issued and paid invoices that can contribute to a customer row: issued in the
      * period, paid in the period, or still outstanding.
      */
-    private function customerQuery(User $user, string $start, string $end): HasMany
+    private function customerQuery(Business $business, string $start, string $end): HasMany
     {
-        return $user->invoices()
+        return $business->invoices()
             ->whereIn('status', [InvoiceStatus::Issued, InvoiceStatus::Paid])
             ->where(fn ($query) => $query
                 ->where(fn ($q) => $q->where('issue_date', '>=', $start)->where('issue_date', '<', $end))
@@ -302,9 +302,9 @@ class ReportService
      *
      * @return array{outstandingCount: int, outstandingAmount: string, overdueCount: int, overdueAmount: string}
      */
-    private function position(User $user, string $today): array
+    private function position(Business $business, string $today): array
     {
-        $row = $user->invoices()
+        $row = $business->invoices()
             ->where('status', InvoiceStatus::Issued)
             ->toBase()
             ->selectRaw(
@@ -330,7 +330,7 @@ class ReportService
      *
      * @return list<array{label: string, count: int, amount: string}>
      */
-    private function ageing(User $user, CarbonImmutable $today): array
+    private function ageing(Business $business, CarbonImmutable $today): array
     {
         $t = $today->toDateString();
         $d30 = $today->subDays(30)->toDateString();
@@ -353,7 +353,7 @@ class ReportService
             array_push($bindings, ...$params, ...$params);
         }
 
-        $row = $user->invoices()
+        $row = $business->invoices()
             ->where('status', InvoiceStatus::Issued)
             ->toBase()
             ->selectRaw(implode(', ', $select), $bindings)

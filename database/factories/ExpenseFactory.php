@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\ExpenseCategory;
+use App\Models\Business;
 use App\Models\Expense;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -20,7 +21,7 @@ class ExpenseFactory extends Factory
     public function definition(): array
     {
         return [
-            'user_id' => User::factory(),
+            'business_id' => Business::factory(),
             'expense_date' => fake()->dateTimeBetween('2026-01-01', '2026-09-01')->format('Y-m-d'),
             'category' => fake()->randomElement(ExpenseCategory::cases()),
             'description' => ucfirst(fake()->words(3, true)),
@@ -28,5 +29,15 @@ class ExpenseFactory extends Factory
             'payee' => fake()->optional()->company(),
             'notes' => null,
         ];
+    }
+
+    /**
+     * Owned by the given user's business.
+     */
+    public function ownedBy(User $user): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'business_id' => $user->businesses()->sole()->getKey(),
+        ]);
     }
 }

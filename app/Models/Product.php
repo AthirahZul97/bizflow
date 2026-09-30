@@ -19,8 +19,8 @@ class Product extends Model
     /**
      * The attributes that are mass assignable.
      *
-     * user_id is intentionally excluded: ownership is always set through the
-     * authenticated user's products() relationship, never from request input.
+     * business_id is intentionally excluded: ownership is always set through the
+     * current business's products() relationship, never from request input.
      *
      * @var list<string>
      */
@@ -69,13 +69,13 @@ class Product extends Model
     }
 
     /**
-     * Get the user that owns the product or service.
+     * Get the business that owns the product or service.
      *
-     * @return BelongsTo<User, $this>
+     * @return BelongsTo<Business, $this>
      */
-    public function user(): BelongsTo
+    public function business(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(Business::class);
     }
 
     /**
@@ -91,7 +91,7 @@ class Product extends Model
     /**
      * Filter items whose name, SKU or description contains the term.
      *
-     * The conditions are grouped so the ORs can never escape an outer user_id
+     * The conditions are grouped so the ORs can never escape an outer business_id
      * constraint, and LIKE wildcards in the term are matched literally.
      *
      * @param  Builder<Product>  $query

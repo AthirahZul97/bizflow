@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Enums\ProductType;
+use App\Support\CurrentBusiness;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -27,8 +28,8 @@ class ProductRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * There is deliberately no user_id rule, so a submitted user_id never
-     * reaches validated() data.
+     * There is deliberately no business_id rule, so a submitted business_id
+     * never reaches validated() data.
      *
      * @return array<string, mixed>
      */
@@ -44,9 +45,9 @@ class ProductRequest extends FormRequest
                 'string',
                 'max:64',
                 'regex:/^[A-Z0-9._\/-]+$/',
-                // Scoped to this user's items; ignore() excludes the item itself on update.
+                // Scoped to the current business's items; ignore() excludes the item itself on update.
                 Rule::unique('products', 'sku')
-                    ->where('user_id', $this->user()->id)
+                    ->where('business_id', app(CurrentBusiness::class)->get()->getKey())
                     ->ignore($this->route('product')),
             ],
             'description' => ['nullable', 'string', 'max:2000'],

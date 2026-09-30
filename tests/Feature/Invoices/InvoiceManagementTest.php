@@ -8,6 +8,7 @@ use App\Models\InvoiceItem;
 use App\Models\Product;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -33,8 +34,8 @@ class InvoiceManagementTest extends TestCase
         $user = User::factory()->create();
         $this->customerFor($user, ['name' => 'Own Customer']);
         $this->customerFor(User::factory()->create(), ['name' => 'Foreign Customer']);
-        Product::factory()->for($user)->create(['name' => 'Active Service']);
-        Product::factory()->for($user)->inactive()->create(['name' => 'Retired Service']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Active Service']);
+        Product::factory()->ownedBy($user)->inactive()->create(['name' => 'Retired Service']);
         Product::factory()->create(['name' => 'Foreign Product']);
 
         $this->actingAs($user)->get(route('invoices.create'))
@@ -65,7 +66,7 @@ class InvoiceManagementTest extends TestCase
         $response->assertRedirect(route('invoices.show', $invoice));
         $response->assertSessionHas('status', 'Draft invoice saved.');
 
-        $this->assertTrue($invoice->user->is($user));
+        $this->assertTrue($this->ownerOf($invoice)->is($user));
         $this->assertSame(InvoiceStatus::Draft, $invoice->status);
         $this->assertNull($invoice->invoice_number);
         $this->assertNull($invoice->invoice_sequence);
@@ -120,7 +121,7 @@ class InvoiceManagementTest extends TestCase
     public function test_selected_product_fills_blank_line_fields_but_never_its_cost(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->service()->create([
+        $product = Product::factory()->ownedBy($user)->service()->create([
             'name' => 'Website Development', 'description' => 'Five-page site', 'unit' => 'project',
             'selling_price' => '1500.00', 'cost_price' => '777.77',
         ]);
@@ -144,7 +145,7 @@ class InvoiceManagementTest extends TestCase
     public function test_typed_line_values_override_the_product(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create(['name' => 'Catalogue Name', 'selling_price' => '1500.00']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Catalogue Name', 'selling_price' => '1500.00']);
 
         $this->actingAs($user)->post(route('invoices.store'), $this->invoicePayload($this->customerFor($user), [
             ['product_id' => $product->id, 'name' => 'Custom Name', 'quantity' => '1', 'unit_price' => '1200.00'],
@@ -159,7 +160,7 @@ class InvoiceManagementTest extends TestCase
     public function test_later_product_changes_do_not_change_invoice_lines(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create(['name' => 'Website Development', 'selling_price' => '1500.00']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Website Development', 'selling_price' => '1500.00']);
         $invoice = $this->draftFor($user, items: [['product_id' => $product->id, 'quantity' => '1']]);
 
         $product->update(['name' => 'Website Development v2', 'selling_price' => '2000.00']);
@@ -174,7 +175,7 @@ class InvoiceManagementTest extends TestCase
     public function test_manual_and_product_lines_can_be_mixed_and_positions_follow_submitted_order(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create(['name' => 'Laptop Stand', 'selling_price' => '89.90']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Laptop Stand', 'selling_price' => '89.90']);
 
         $this->actingAs($user)->post(route('invoices.store'), $this->invoicePayload($this->customerFor($user), [
             ['name' => 'Consultation', 'quantity' => '1.5', 'unit_price' => '200.00'],
@@ -202,6 +203,22 @@ class InvoiceManagementTest extends TestCase
 
         $this->assertSame(['Only Line'], InvoiceItem::pluck('name')->all());
         $this->assertSame(1, InvoiceItem::sole()->position);
+    }
+
+    public function test_creating_a_draft_does_not_delete_lines_first(): void
+    {
+        // Deleting a new invoice's (non-existent) lines took a MySQL gap lock that made
+        // concurrent draft creation deadlock; only edits of an existing draft delete lines.
+        $user = User::factory()->create();
+        $customer = $this->customerFor($user);
+
+        DB::enableQueryLog();
+        $invoice = $this->draftFor($user, $customer);
+        $queries = array_column(DB::getQueryLog(), 'query');
+        DB::disableQueryLog();
+
+        $this->assertSame([], array_values(array_filter($queries, fn ($sql) => str_starts_with(strtolower($sql), 'delete'))));
+        $this->assertCount(1, $invoice->items);
     }
 
     public function test_editing_a_draft_replaces_its_lines_and_recalculates(): void
@@ -237,7 +254,7 @@ class InvoiceManagementTest extends TestCase
     public function test_a_draft_may_keep_a_product_that_was_deactivated_after_it_was_added(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create(['name' => 'Legacy Plan']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Legacy Plan']);
         $invoice = $this->draftFor($user, items: [['product_id' => $product->id, 'quantity' => '1']]);
         $product->update(['is_active' => false]);
 
@@ -253,7 +270,7 @@ class InvoiceManagementTest extends TestCase
     public function test_an_inactive_product_cannot_be_newly_added(): void
     {
         $user = User::factory()->create();
-        $inactive = Product::factory()->for($user)->inactive()->create();
+        $inactive = Product::factory()->ownedBy($user)->inactive()->create();
         $invoice = $this->draftFor($user);
 
         $this->actingAs($user)->post(route('invoices.store'), $this->invoicePayload($invoice->customer, [
@@ -302,6 +319,8 @@ class InvoiceManagementTest extends TestCase
             ['name' => 'Line 2', 'quantity' => '1', 'unit_price' => '1.00', 'line_total' => '0.01', 'position' => '7'],
         ], [
             'user_id' => $victim->id,
+            'business_id' => $this->businessOf($victim)->id,
+            'created_by' => $victim->id,
             'status' => 'paid',
             'invoice_number' => 'INV-99999',
             'invoice_sequence' => 99999,
@@ -315,7 +334,8 @@ class InvoiceManagementTest extends TestCase
         ]))->assertSessionHasNoErrors();
 
         $invoice = Invoice::sole();
-        $this->assertSame($user->id, $invoice->user_id);
+        $this->assertSame($this->businessOf($user)->id, $invoice->business_id);
+        $this->assertSame($user->id, $invoice->created_by);
         $this->assertSame(InvoiceStatus::Draft, $invoice->status);
         $this->assertNull($invoice->invoice_number);
         $this->assertNull($invoice->invoice_sequence);

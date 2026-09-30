@@ -23,8 +23,8 @@ class ExpenseRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * The limits match the expenses columns exactly. There is deliberately no
-     * user_id rule, so a submitted user_id never reaches validated() data.
+     * The limits match the expenses columns exactly. There are deliberately no
+     * business_id or created_by rules, so submitted values never reach validated() data.
      * "today" follows the application's Asia/Kuala_Lumpur timezone.
      *
      * @return array<string, mixed>

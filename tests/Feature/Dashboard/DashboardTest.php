@@ -36,12 +36,12 @@ class DashboardTest extends TestCase
             $factory = $factory->{$state}();
         }
 
-        return $factory->create(['user_id' => ($owner ?? $this->user)->id] + $attributes);
+        return $factory->ownedBy($owner ?? $this->user)->create($attributes);
     }
 
     private function expense(array $attributes = [], ?User $owner = null): Expense
     {
-        return Expense::factory()->for($owner ?? $this->user)->create($attributes);
+        return Expense::factory()->ownedBy($owner ?? $this->user)->create($attributes);
     }
 
     private function dashboard(array $query = [], ?User $as = null): TestResponse
@@ -343,7 +343,7 @@ class DashboardTest extends TestCase
 
     public function test_recent_activity_shows_five_newest_of_each(): void
     {
-        $customer = Customer::factory()->for($this->user)->create();
+        $customer = Customer::factory()->ownedBy($this->user)->create();
         foreach (range(1, 6) as $i) {
             $this->invoice('draft', ['customer_id' => $customer->id, 'customer_name' => "Recent Customer {$i}"]);
             $this->expense(['expense_date' => sprintf('2026-09-%02d', $i), 'description' => "Recent Expense {$i}"]);
@@ -418,7 +418,7 @@ class DashboardTest extends TestCase
 
     public function test_get_started_disappears_once_the_user_has_a_customer(): void
     {
-        Customer::factory()->for($this->user)->create();
+        Customer::factory()->ownedBy($this->user)->create();
 
         $this->dashboard()->assertDontSee('data-dashboard-get-started', false);
     }
@@ -440,7 +440,7 @@ class DashboardTest extends TestCase
         $this->invoice('paid', ['paid_at' => '2026-09-05', 'issue_date' => '2026-09-05', 'total' => '10.00', 'customer_name' => 'Mine']);
         $this->expense(['expense_date' => '2026-09-06', 'category' => 'office', 'amount' => '3.00', 'description' => 'My pens']);
 
-        foreach ([[], ['user_id' => $other->id], ['period' => 'this_year', 'user_id' => $other->id]] as $query) {
+        foreach ([[], ['user_id' => $other->id], ['business_id' => $this->businessOf($other)->id], ['period' => 'this_year', 'business_id' => $this->businessOf($other)->id]] as $query) {
             $response = $this->dashboard($query);
 
             $this->assertSame('RM 10.00', $this->kpi($response, 'received'));

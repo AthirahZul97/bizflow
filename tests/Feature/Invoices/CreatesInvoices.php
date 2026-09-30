@@ -20,7 +20,7 @@ trait CreatesInvoices
 
     protected function customerFor(User $user, array $attributes = []): Customer
     {
-        return Customer::factory()->for($user)->create($attributes);
+        return Customer::factory()->ownedBy($user)->create($attributes);
     }
 
     /**
@@ -59,7 +59,7 @@ trait CreatesInvoices
     {
         $customer ??= $this->customerFor($user);
 
-        return app(InvoiceService::class)->saveDraft($user, $this->invoicePayload($customer, $items, $overrides));
+        return app(InvoiceService::class)->saveDraft($this->businessOf($user), $user, $this->invoicePayload($customer, $items, $overrides));
     }
 
     protected function issuedFor(User $user, ?Customer $customer = null, array $overrides = []): Invoice

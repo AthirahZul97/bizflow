@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\ExpenseCategory;
 use App\Http\Requests\ExpenseRequest;
 use App\Models\Expense;
+use App\Support\CurrentBusiness;
 use App\Support\Money;
 use Brick\Math\BigDecimal;
 use Illuminate\Http\RedirectResponse;
@@ -17,11 +18,13 @@ use Illuminate\View\View;
 
 class ExpenseController extends Controller implements HasMiddleware
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Authorize every action through ExpensePolicy.
      *
      * Running as middleware means ownership is checked before an ExpenseRequest
-     * is validated, so another user's expense returns 404, never validation errors.
+     * is validated, so another business's expense returns 404, never validation errors.
      */
     public static function middleware(): array
     {
@@ -35,7 +38,7 @@ class ExpenseController extends Controller implements HasMiddleware
     }
 
     /**
-     * List the authenticated user's expenses with optional search, category and date filters,
+     * List the current business's expenses with optional search, category and date filters,
      * plus the count and total of everything matching those filters.
      */
     public function index(Request $request): View
@@ -49,7 +52,7 @@ class ExpenseController extends Controller implements HasMiddleware
         $from = $this->dateFilter($request->query('from'));
         $to = $this->dateFilter($request->query('to'));
 
-        $query = $request->user()->expenses()
+        $query = $this->currentBusiness->get()->expenses()
             ->search($search)
             ->when($category, fn ($query) => $query->where('category', $category))
             ->when($from, fn ($query) => $query->where('expense_date', '>=', $from))
@@ -80,11 +83,12 @@ class ExpenseController extends Controller implements HasMiddleware
     }
 
     /**
-     * Store an expense owned by the authenticated user.
+     * Store an expense owned by the current business, recording who entered it.
      */
     public function store(ExpenseRequest $request): RedirectResponse
     {
-        $expense = $request->user()->expenses()->create($request->validated());
+        $expense = $this->currentBusiness->get()->expenses()->make($request->validated());
+        $expense->forceFill(['created_by' => $request->user()->getKey()])->save();
 
         return redirect()->route('expenses.show', $expense)
             ->with('status', 'Expense recorded.');

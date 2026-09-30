@@ -19,8 +19,9 @@ class Invoice extends Model
     /**
      * The attributes that are mass assignable.
      *
-     * Only the fields a user edits on a draft. Ownership, status, numbering,
-     * currency, totals and the copied customer details are set by InvoiceService.
+     * Only the fields a user edits on a draft. Ownership (business_id), created_by,
+     * status, numbering, currency, totals and the copied customer details are set
+     * by InvoiceService.
      *
      * @var list<string>
      */
@@ -74,11 +75,25 @@ class Invoice extends Model
     }
 
     /**
+     * Get the business that owns the invoice (the seller).
+     *
+     * @return BelongsTo<Business, $this>
+     */
+    public function business(): BelongsTo
+    {
+        return $this->belongsTo(Business::class);
+    }
+
+    /**
+     * Get the person who created the invoice. Audit metadata only: NULL means it was
+     * system-generated or has no associated person. Never use it for authorization
+     * or tenant filtering; ownership is business_id.
+     *
      * @return BelongsTo<User, $this>
      */
-    public function user(): BelongsTo
+    public function creator(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'created_by');
     }
 
     /**
@@ -110,7 +125,7 @@ class Invoice extends Model
     /**
      * Filter invoices whose number, customer name or company contains the term.
      *
-     * The conditions are grouped so the ORs can never escape an outer user_id
+     * The conditions are grouped so the ORs can never escape an outer business_id
      * constraint, and LIKE wildcards in the term are matched literally.
      *
      * @param  Builder<Invoice>  $query

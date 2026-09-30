@@ -4,10 +4,13 @@ namespace App\Policies;
 
 use App\Models\Customer;
 use App\Models\User;
+use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class CustomerPolicy
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Any authenticated user may list customers; the query itself is scoped to them.
      */
@@ -49,11 +52,11 @@ class CustomerPolicy
     }
 
     /**
-     * Another user's customer is reported as not found, so record IDs cannot be probed.
+     * Another business's customer is reported as not found, so record IDs cannot be probed.
      */
     private function owns(User $user, Customer $customer): Response
     {
-        return $customer->user()->is($user)
+        return $this->currentBusiness->owns($user, $customer)
             ? Response::allow()
             : Response::denyAsNotFound();
     }

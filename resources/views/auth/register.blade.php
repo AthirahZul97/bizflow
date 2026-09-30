@@ -23,6 +23,17 @@
                         </div>
 
                         <div class="mb-3">
+                            <label for="business_name" class="form-label">Business name</label>
+                            <input id="business_name" type="text" name="business_name" value="{{ old('business_name') }}"
+                                   class="form-control @error('business_name') is-invalid @enderror"
+                                   required autocomplete="organization" maxlength="255" aria-describedby="businessNameHelp">
+                            @error('business_name')
+                                <div class="invalid-feedback">{{ $message }}</div>
+                            @enderror
+                            <div id="businessNameHelp" class="form-text">Shown as the seller on your invoices. You can change it later.</div>
+                        </div>
+
+                        <div class="mb-3">
                             <label for="email" class="form-label">Email</label>
                             <input id="email" type="email" name="email" value="{{ old('email') }}"
                                    class="form-control @error('email') is-invalid @enderror"

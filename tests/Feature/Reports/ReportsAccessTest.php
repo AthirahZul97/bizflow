@@ -139,10 +139,10 @@ class ReportsAccessTest extends TestCase
 
         $before = $render();
         $other = $this->seedOtherUser();
-        $foreignInvoice = $other->invoices()->first();
+        $foreignInvoice = $this->businessOf($other)->invoices()->first();
 
-        $this->assertSame($before, $render(), 'Another user\'s data changed the report');
-        foreach ([['user_id' => $other->id], ['customer_id' => $foreignInvoice->customer_id], ['invoice_id' => $foreignInvoice->id]] as $forged) {
+        $this->assertSame($before, $render(), 'Another business\'s data changed the report');
+        foreach ([['user_id' => $other->id], ['business_id' => $this->businessOf($other)->id], ['customer_id' => $foreignInvoice->customer_id], ['invoice_id' => $foreignInvoice->id]] as $forged) {
             $html = $render($forged);
             $this->assertStringNotContainsString('Other ', strip_tags($html));
             $this->assertStringNotContainsString('1,000.00', $html);

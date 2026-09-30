@@ -10,7 +10,7 @@ use Illuminate\Routing\Controllers\Middleware;
 
 /**
  * Downloads an invoice as a PDF. InvoicePolicy::downloadPdf runs first:
- * another user's invoice is 404 and a draft is 403.
+ * another business's invoice is 404 and a draft is 403.
  */
 class InvoicePdfController extends Controller implements HasMiddleware
 {

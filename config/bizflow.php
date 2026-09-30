@@ -22,7 +22,7 @@ return [
     | Invoices
     |--------------------------------------------------------------------------
     |
-    | Invoice numbers are assigned per user when an invoice is issued, e.g.
+    | Invoice numbers are assigned per business when an invoice is issued, e.g.
     | INV-00001. The sequence is continuous and never reset or reused.
     |
     */

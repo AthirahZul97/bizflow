@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\InvoiceRequest;
 use App\Models\Invoice;
 use App\Services\InvoiceService;
+use App\Support\CurrentBusiness;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controllers\HasMiddleware;
@@ -14,13 +15,16 @@ use Illuminate\View\View;
 
 class InvoiceController extends Controller implements HasMiddleware
 {
-    public function __construct(private readonly InvoiceService $invoices) {}
+    public function __construct(
+        private readonly InvoiceService $invoices,
+        private readonly CurrentBusiness $currentBusiness,
+    ) {}
 
     /**
      * Authorize every action through InvoicePolicy.
      *
      * Running as middleware means ownership and draft status are checked before
-     * an InvoiceRequest is validated, so another user's invoice returns 404,
+     * an InvoiceRequest is validated, so another business's invoice returns 404,
      * never validation errors.
      */
     public static function middleware(): array
@@ -35,7 +39,7 @@ class InvoiceController extends Controller implements HasMiddleware
     }
 
     /**
-     * List the authenticated user's invoices, optionally searched and filtered by status.
+     * List the current business's invoices, optionally searched and filtered by status.
      */
     public function index(Request $request): View
     {
@@ -45,7 +49,7 @@ class InvoiceController extends Controller implements HasMiddleware
         $status = $request->query('status');
         $status = in_array($status, Invoice::STATUS_FILTERS, true) ? $status : null;
 
-        $invoices = $request->user()->invoices()
+        $invoices = $this->currentBusiness->get()->invoices()
             ->search($search)
             ->when($status, fn ($query) => $query->filterStatus($status))
             ->orderByDesc('issue_date')
@@ -72,11 +76,11 @@ class InvoiceController extends Controller implements HasMiddleware
     }
 
     /**
-     * Save a new draft owned by the authenticated user.
+     * Save a new draft owned by the current business, created by the authenticated user.
      */
     public function store(InvoiceRequest $request): RedirectResponse
     {
-        $invoice = $this->invoices->saveDraft($request->user(), $request->validated());
+        $invoice = $this->invoices->saveDraft($this->currentBusiness->get(), $request->user(), $request->validated());
 
         return redirect()->route('invoices.show', $invoice)
             ->with('status', 'Draft invoice saved.');
@@ -87,7 +91,7 @@ class InvoiceController extends Controller implements HasMiddleware
      */
     public function show(Invoice $invoice): View
     {
-        $invoice->load('items');
+        $invoice->load(['items', 'business']);
 
         return view('invoices.show', compact('invoice'));
     }
@@ -107,7 +111,7 @@ class InvoiceController extends Controller implements HasMiddleware
      */
     public function update(InvoiceRequest $request, Invoice $invoice): RedirectResponse
     {
-        $invoice = $this->invoices->saveDraft($request->user(), $request->validated(), $invoice);
+        $invoice = $this->invoices->saveDraft($this->currentBusiness->get(), $request->user(), $request->validated(), $invoice);
 
         return redirect()->route('invoices.show', $invoice)
             ->with('status', 'Draft invoice updated.');
@@ -133,21 +137,22 @@ class InvoiceController extends Controller implements HasMiddleware
     }
 
     /**
-     * The user's customers, and the products a line may use: active ones plus
+     * The business's customers, and the products a line may use: active ones plus
      * any inactive ones this draft already uses.
      *
      * @return array<string, mixed>
      */
     private function formData(Request $request, Invoice $invoice): array
     {
+        $business = $this->currentBusiness->get();
         $usedProductIds = $invoice->exists
             ? $invoice->items->pluck('product_id')->filter()->all()
             : [];
 
         return [
             'invoice' => $invoice,
-            'customers' => $request->user()->customers()->orderBy('name')->get(),
-            'products' => $request->user()->products()
+            'customers' => $business->customers()->orderBy('name')->get(),
+            'products' => $business->products()
                 ->where(fn ($query) => $query->active()->orWhereIn('id', $usedProductIds))
                 ->orderBy('name')
                 ->get(),

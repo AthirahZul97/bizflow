@@ -83,7 +83,7 @@ class InvoicePdfTest extends TestCase
         $this->get(route('invoices.pdf', $invoice))->assertRedirect(route('login'));
     }
 
-    public function test_another_users_invoice_is_not_found_in_every_status(): void
+    public function test_another_businesss_invoice_is_not_found_in_every_status(): void
     {
         $owner = User::factory()->create();
         $intruder = User::factory()->create();
@@ -138,7 +138,7 @@ class InvoicePdfTest extends TestCase
     {
         $user = User::factory()->create();
         $customer = $this->customerFor($user, ['name' => 'Original Customer', 'email' => 'original@example.com']);
-        $product = Product::factory()->for($user)->create([
+        $product = Product::factory()->ownedBy($user)->create([
             'name' => 'Original Product', 'unit' => 'hour', 'selling_price' => '120.00',
         ]);
         $draft = $this->draftFor($user, $customer, [[
@@ -286,6 +286,104 @@ class InvoicePdfTest extends TestCase
         $this->assertSame($before, $invoice->fresh()->getAttributes());
         $this->assertSame($itemsBefore, $invoice->items()->get()->map->getAttributes()->all());
         $this->assertSame($customerBefore, $invoice->customer()->first()->getAttributes());
+    }
+
+    public function test_the_pdf_and_invoice_page_show_the_business_profile_as_seller(): void
+    {
+        $user = User::factory()->create();
+        $this->businessOf($user)->update([
+            'name' => 'Acme Studio Sdn Bhd',
+            'registration_number' => '202001234567 (1234567-A)',
+            'sst_number' => 'W10-1808-32000012',
+            'email' => 'billing@acme.test',
+            'phone' => '+60 3-1234 5678',
+            'address_line_1' => '12 Jalan Bukit',
+            'address_line_2' => 'Taman Melawati',
+            'city' => 'Kuala Lumpur',
+            'state' => 'Wilayah Persekutuan',
+            'postcode' => '53100',
+            'country' => 'Malaysia',
+        ]);
+        $invoice = $this->issuedFor($user);
+
+        $expected = [
+            'Acme Studio Sdn Bhd', '12 Jalan Bukit', 'Taman Melawati', '53100 Kuala Lumpur, Wilayah Persekutuan', 'Malaysia',
+            'Registration No.: 202001234567 (1234567-A)', 'SST No.: W10-1808-32000012', 'billing@acme.test · +60 3-1234 5678',
+        ];
+
+        $seller = $this->sellerBlock($this->html($invoice));
+        foreach ($expected as $text) {
+            $this->assertStringContainsString($text, $seller);
+        }
+
+        $page = $this->actingAs($user)->get(route('invoices.show', $invoice))->assertOk();
+        foreach ($expected as $text) {
+            $page->assertSee($text);
+        }
+
+        $this->assertPdfDownload($this->actingAs($user)->get(route('invoices.pdf', $invoice)), 'INV-00001.pdf');
+    }
+
+    public function test_a_minimal_profile_shows_only_the_business_name(): void
+    {
+        $user = User::factory()->create(['name' => 'Solo Trader']);
+        $invoice = $this->issuedFor($user);
+
+        $seller = $this->sellerBlock($this->html($invoice));
+
+        $this->assertStringContainsString('Solo Trader', $seller);
+        $this->assertStringNotContainsString('Registration No.', $seller);
+        $this->assertStringNotContainsString('SST No.', $seller);
+        $this->assertStringNotContainsString('·', $seller);
+    }
+
+    public function test_the_seller_is_the_businesss_current_profile_while_the_customer_stays_a_snapshot(): void
+    {
+        $user = User::factory()->create(['name' => 'Old Trading Name']);
+        $customer = $this->customerFor($user, ['name' => 'Original Customer']);
+        $invoice = $this->issuedFor($user, $customer);
+
+        $this->businessOf($user)->update(['name' => 'New Trading Name', 'sst_number' => 'W10-NEW']);
+        $customer->update(['name' => 'Renamed Customer']);
+
+        $html = $this->html($invoice);
+
+        // Seller details are read live (not copied onto invoices yet).
+        $this->assertStringContainsString('New Trading Name', $html);
+        $this->assertStringContainsString('SST No.: W10-NEW', $html);
+        $this->assertStringNotContainsString('Old Trading Name', $html);
+        // Customer details remain the copy taken when the invoice was issued.
+        $this->assertStringContainsString('Original Customer', $html);
+        $this->assertStringNotContainsString('Renamed Customer', $html);
+    }
+
+    public function test_business_profile_values_are_escaped_in_the_pdf(): void
+    {
+        $user = User::factory()->create();
+        $this->businessOf($user)->update([
+            'name' => '<script>alert(1)</script>',
+            'sst_number' => '<img src=x onerror=alert(2)>',
+            'address_line_1' => '<b>Bold street</b>',
+        ]);
+        $invoice = $this->issuedFor($user);
+
+        $html = $this->html($invoice);
+
+        $this->assertStringNotContainsString('<script>', $html);
+        $this->assertStringNotContainsString('<img', $html);
+        $this->assertStringNotContainsString('<b>Bold', $html);
+        $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $html);
+        $this->assertStringContainsString('SST No.: &lt;img src=x onerror=alert(2)&gt;', $html);
+    }
+
+    /**
+     * The seller cell of the PDF header.
+     */
+    private function sellerBlock(string $html): string
+    {
+        $this->assertSame(1, preg_match('/<td[^>]*data-pdf-seller>(.*?)<\/td>/s', $html, $match));
+
+        return $match[1];
     }
 
     public function test_a_long_invoice_renders_across_several_pages(): void

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\DashboardService;
+use App\Support\CurrentBusiness;
 use App\Support\ReportingPeriod;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -10,12 +11,12 @@ use Illuminate\View\View;
 class DashboardController extends Controller
 {
     /**
-     * Show the authenticated user's dashboard for the selected period.
+     * Show the current business's dashboard for the selected period.
      */
-    public function __invoke(Request $request, DashboardService $dashboard): View
+    public function __invoke(Request $request, DashboardService $dashboard, CurrentBusiness $currentBusiness): View
     {
         $period = ReportingPeriod::fromRequest($request, ReportingPeriod::DASHBOARD_PRESETS, ReportingPeriod::THIS_MONTH);
 
-        return view('dashboard', ['period' => $period] + $dashboard->summary($request->user(), $period));
+        return view('dashboard', ['period' => $period] + $dashboard->summary($currentBusiness->get(), $period));
     }
 }

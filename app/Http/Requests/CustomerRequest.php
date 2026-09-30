@@ -20,7 +20,7 @@ class CustomerRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * There is deliberately no user_id rule, so a submitted user_id never
+     * There is deliberately no business_id rule, so a submitted business_id never
      * reaches validated() data.
      *
      * @return array<string, mixed>

@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\ProductType;
+use App\Models\Business;
 use App\Models\Product;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -20,7 +21,7 @@ class ProductFactory extends Factory
     public function definition(): array
     {
         return [
-            'user_id' => User::factory(),
+            'business_id' => Business::factory(),
             'type' => ProductType::Product,
             'name' => ucfirst(fake()->words(3, true)),
             'sku' => fake()->unique()->numerify('SKU-######'),
@@ -50,6 +51,16 @@ class ProductFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'is_active' => false,
+        ]);
+    }
+
+    /**
+     * Owned by the given user's business.
+     */
+    public function ownedBy(User $user): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'business_id' => $user->businesses()->sole()->getKey(),
         ]);
     }
 }

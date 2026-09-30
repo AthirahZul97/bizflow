@@ -1,7 +1,8 @@
 {{--
     Invoice PDF (rendered by DomPDF). Standalone: no app layout, scripts, images or
     external assets. Layout uses tables because DomPDF has no flexbox or grid.
-    Every value comes from the details copied onto the invoice and is escaped.
+    Every value comes from the details copied onto the invoice, plus the seller's
+    current business profile, and is escaped.
 --}}
 @php
     use App\Support\Money;
@@ -12,6 +13,7 @@
         $invoice->isOverdue() => 'OVERDUE',
         default => 'ISSUED',
     };
+    $seller = $invoice->business;
     $discount = $invoice->discount_amount;
     $hasDiscount = $discount !== '0.00';
 @endphp
@@ -30,6 +32,7 @@
         .right { text-align: right; }
         .nowrap { white-space: nowrap; }
         .seller { font-size: 14pt; font-weight: bold; }
+        .seller-details { margin-top: 3px; font-size: 8.5pt; color: #495057; }
         .title { font-size: 20pt; font-weight: bold; letter-spacing: 1px; }
         .status { display: inline-block; padding: 2px 8px; border: 1px solid #6c757d; font-weight: bold; font-size: 9pt; }
         .status-cancelled, .status-overdue { border-color: #b02a37; color: #b02a37; }
@@ -54,8 +57,23 @@
 <body>
     <table>
         <tr>
-            <td style="width: 55%">
-                <div class="seller">{{ $invoice->user->name }}</div>
+            <td style="width: 55%" data-pdf-seller>
+                {{-- The business's current profile (not copied onto the invoice). --}}
+                <div class="seller">{{ $seller->name }}</div>
+                <div class="seller-details">
+                    @foreach ($seller->addressLines() as $line)
+                        <div>{{ $line }}</div>
+                    @endforeach
+                    @if ($seller->registration_number)
+                        <div>Registration No.: {{ $seller->registration_number }}</div>
+                    @endif
+                    @if ($seller->sst_number)
+                        <div>SST No.: {{ $seller->sst_number }}</div>
+                    @endif
+                    @if ($seller->email || $seller->phone)
+                        <div>{{ collect([$seller->email, $seller->phone])->filter()->implode(' · ') }}</div>
+                    @endif
+                </div>
             </td>
             <td class="right">
                 <div class="title">INVOICE</div>

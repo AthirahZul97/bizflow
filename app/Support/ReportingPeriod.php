@@ -14,7 +14,7 @@ use Illuminate\Http\Request;
  *
  * Queries use a half-open range: date >= startDate() AND date < endExclusive().
  * That includes both end days whether the driver stores a bare DATE (MySQL) or
- * a date with a time (SQLite), and keeps the (user_id, date) indexes usable.
+ * a date with a time (SQLite), and keeps the (business_id, date) indexes usable.
  */
 final class ReportingPeriod
 {

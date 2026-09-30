@@ -12,8 +12,8 @@ use ReflectionClass;
 /**
  * Renders an invoice as a PDF. Read-only: it never changes the invoice.
  *
- * Everything shown comes from the details copied onto the invoice and its lines;
- * the only other data read is the seller's name, as on the invoice page.
+ * Everything shown comes from the details copied onto the invoice and its lines,
+ * plus the seller's current business profile, as on the invoice page.
  * The HTML is our own template with every value escaped, and DomPDF runs with
  * remote access, PHP and JavaScript disabled and file access limited to its fonts.
  */
@@ -24,7 +24,7 @@ class InvoicePdfService
      */
     public function html(Invoice $invoice): string
     {
-        $invoice->loadMissing(['items', 'user']);
+        $invoice->loadMissing(['items', 'business']);
 
         return view('invoices.pdf', ['invoice' => $invoice])->render();
     }

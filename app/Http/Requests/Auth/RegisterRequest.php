@@ -26,6 +26,7 @@ class RegisterRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:255'],
+            'business_name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'confirmed', 'min:8', 'max:72'],
         ];
@@ -38,6 +39,7 @@ class RegisterRequest extends FormRequest
     {
         $this->merge([
             'name' => is_string($this->name) ? trim($this->name) : $this->name,
+            'business_name' => is_string($this->business_name) ? trim($this->business_name) : $this->business_name,
             'email' => is_string($this->email) ? mb_strtolower(trim($this->email)) : $this->email,
         ]);
     }

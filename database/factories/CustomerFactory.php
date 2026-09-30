@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\Business;
 use App\Models\Customer;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -19,7 +20,7 @@ class CustomerFactory extends Factory
     public function definition(): array
     {
         return [
-            'user_id' => User::factory(),
+            'business_id' => Business::factory(),
             'name' => fake()->name(),
             'company_name' => fake()->optional()->company(),
             'email' => fake()->optional()->safeEmail(),
@@ -32,5 +33,15 @@ class CustomerFactory extends Factory
             'country' => fake()->optional()->country(),
             'notes' => null,
         ];
+    }
+
+    /**
+     * Owned by the given user's business.
+     */
+    public function ownedBy(User $user): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'business_id' => $user->businesses()->sole()->getKey(),
+        ]);
     }
 }

@@ -17,8 +17,8 @@ class Customer extends Model
     /**
      * The attributes that are mass assignable.
      *
-     * user_id is intentionally excluded: ownership is always set through the
-     * authenticated user's customers() relationship, never from request input.
+     * business_id is intentionally excluded: ownership is always set through the
+     * current business's customers() relationship, never from request input.
      *
      * @var list<string>
      */
@@ -44,13 +44,13 @@ class Customer extends Model
     private const SEARCHABLE = ['name', 'company_name', 'email', 'phone'];
 
     /**
-     * Get the user that owns the customer.
+     * Get the business that owns the customer.
      *
-     * @return BelongsTo<User, $this>
+     * @return BelongsTo<Business, $this>
      */
-    public function user(): BelongsTo
+    public function business(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(Business::class);
     }
 
     /**
@@ -66,7 +66,7 @@ class Customer extends Model
     /**
      * Filter customers whose name, company, email or phone contains the term.
      *
-     * The conditions are grouped so the ORs can never escape an outer user_id
+     * The conditions are grouped so the ORs can never escape an outer business_id
      * constraint, and LIKE wildcards in the term are matched literally.
      *
      * @param  Builder<Customer>  $query

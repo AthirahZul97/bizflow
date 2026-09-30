@@ -44,7 +44,7 @@ class ErrorPagesTest extends TestCase
     {
         $invoice = Invoice::factory()->issued()->create();
 
-        $this->actingAs($invoice->user)->get(route('invoices.edit', $invoice))
+        $this->actingAs($this->ownerOf($invoice))->get(route('invoices.edit', $invoice))
             ->assertForbidden()
             ->assertSee('data-error-page="403"', false)
             ->assertSee('Only draft invoices can be edited.')

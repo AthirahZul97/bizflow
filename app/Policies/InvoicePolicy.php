@@ -5,6 +5,7 @@ namespace App\Policies;
 use App\Enums\InvoiceStatus;
 use App\Models\Invoice;
 use App\Models\User;
+use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 /**
@@ -14,6 +15,8 @@ use Illuminate\Auth\Access\Response;
  */
 class InvoicePolicy
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Any authenticated user may list invoices; the query itself is scoped to them.
      */
@@ -100,11 +103,11 @@ class InvoicePolicy
     }
 
     /**
-     * Another user's invoice is reported as not found, so record IDs cannot be probed.
+     * Another business's invoice is reported as not found, so record IDs cannot be probed.
      */
     private function owns(User $user, Invoice $invoice): Response
     {
-        return $invoice->user()->is($user)
+        return $this->currentBusiness->owns($user, $invoice)
             ? Response::allow()
             : Response::denyAsNotFound();
     }

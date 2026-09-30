@@ -23,8 +23,9 @@ class Expense extends Model
     /**
      * The attributes that are mass assignable.
      *
-     * user_id is intentionally excluded: ownership is always set through the
-     * authenticated user's expenses() relationship, never from request input.
+     * business_id and created_by are intentionally excluded: ownership is always set
+     * through the current business's expenses() relationship and created_by by the
+     * controller, never from request input.
      *
      * @var list<string>
      */
@@ -61,19 +62,31 @@ class Expense extends Model
     }
 
     /**
-     * Get the user that owns the expense.
+     * Get the business that owns the expense.
+     *
+     * @return BelongsTo<Business, $this>
+     */
+    public function business(): BelongsTo
+    {
+        return $this->belongsTo(Business::class);
+    }
+
+    /**
+     * Get the person who recorded the expense. Audit metadata only: NULL means it was
+     * system-generated or has no associated person. Never use it for authorization
+     * or tenant filtering; ownership is business_id.
      *
      * @return BelongsTo<User, $this>
      */
-    public function user(): BelongsTo
+    public function creator(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'created_by');
     }
 
     /**
      * Filter expenses whose description or payee contains the term.
      *
-     * The conditions are grouped so the ORs can never escape an outer user_id
+     * The conditions are grouped so the ORs can never escape an outer business_id
      * constraint, and LIKE wildcards in the term are matched literally.
      *
      * @param  Builder<Expense>  $query

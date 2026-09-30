@@ -7,19 +7,43 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
 
 - All MVP modules are complete: Authentication, Customers, Products / Services, Invoices,
   Expenses, Dashboard and Reports.
-- Final MVP polish is being completed; the current stage is final MVP verification.
+- Phase 2 so far: invoice PDF download, and Phase 2A: the business tenancy
+  foundation with a business profile. Next approved phases: 2B Email Invoice, 2C Recurring
+  Invoices, 2D Commercial SaaS.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
 ## Data isolation (critical)
 
-- Every business record belongs to a user through a `user_id` foreign key.
-- **Never trust `user_id` from request input.** Set it from the authenticated user,
-  e.g. `$request->user()->customers()->create($validated)`.
-- Always scope queries to the authenticated user, preferably through relationships
-  (`$request->user()->invoices()`), never `Model::all()` / unscoped `Model::find()` for business data.
-- Authorize access to individual records with Policies. Another user's record must never be readable or writable.
-- Add feature tests proving that one user cannot see or change another user's records.
+- **The business is the tenant boundary.** Every business record (customers, products, invoices,
+  expenses) belongs to a Business through a required `business_id` foreign key. Invoice items
+  belong to their invoice. Users belong to businesses through `business_user` memberships.
+- **Ownership:** `business_id` alone determines ownership. `created_by` (invoices, expenses) is
+  audit metadata only: `created_by = NULL` means the record was system-generated or has no
+  associated person, and it must never be read as tenant ownership. Never use `created_by` for
+  authorization or tenant filtering.
+- **Current business:** HTTP code (controllers, form requests, policies) gets it only from
+  `App\Support\CurrentBusiness`. Services, jobs and commands receive a `Business` explicitly and
+  never resolve it themselves.
+- **Queries:** every query on business data starts from the business
+  (`$business->invoices()`), never `Model::query()`, `Model::all()` or an unscoped
+  `Model::find()`. No global scopes or automatic tenant filtering. Users have no direct
+  customer/product/invoice/expense relationships; don't add them back.
+- **Never trust a request-supplied `business_id` or `created_by`.** Neither is fillable or
+  validated. Set ownership through the relationship, e.g.
+  `$business->customers()->create($validated)`.
+- **Policies** enforce membership of the current business plus record ownership, and return 404
+  for another business's records.
+- **Form Requests:** every `exists` / `unique` rule on business data is scoped by the current
+  business's `business_id`. Services re-check that referenced customers and products belong to
+  the business.
+- **Invoice numbering** is per business: the generator locks the business row, and the unique
+  `(business_id, invoice_number)` / `(business_id, invoice_sequence)` indexes back it up.
+- **Tests:** every module includes cross-business isolation tests (list, view, update, delete,
+  forged IDs and forged `business_id`).
+- **Migrations that change tenancy or other schema destructively** are rehearsed on a scratch
+  database with a fresh backup first; restoring the backup is the recovery of record, not
+  `migrate:rollback`.
 
 ## Conventions
 

@@ -63,8 +63,21 @@
     <div class="card shadow-sm">
         <div class="card-body p-4 p-lg-5">
             <div class="d-flex flex-wrap justify-content-between gap-3 mb-4">
-                <div>
-                    <div class="fs-4 fw-semibold">{{ $invoice->user->name }}</div>
+                {{-- Seller: the business's current profile (not copied onto the invoice). --}}
+                <div data-seller>
+                    <div class="fs-4 fw-semibold">{{ $invoice->business->name }}</div>
+                    @foreach ($invoice->business->addressLines() as $line)
+                        <div class="small">{{ $line }}</div>
+                    @endforeach
+                    @if ($invoice->business->registration_number)
+                        <div class="small">Registration No.: {{ $invoice->business->registration_number }}</div>
+                    @endif
+                    @if ($invoice->business->sst_number)
+                        <div class="small">SST No.: {{ $invoice->business->sst_number }}</div>
+                    @endif
+                    @if ($invoice->business->email || $invoice->business->phone)
+                        <div class="small">{{ collect([$invoice->business->email, $invoice->business->phone])->filter()->implode(' · ') }}</div>
+                    @endif
                 </div>
                 <div class="text-md-end">
                     <h1 class="h3 mb-1">{{ $invoice->invoice_number ? 'Invoice '.$invoice->invoice_number : 'Draft invoice' }}</h1>

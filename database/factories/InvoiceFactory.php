@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\InvoiceStatus;
+use App\Models\Business;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\User;
@@ -19,15 +20,15 @@ use Illuminate\Support\Facades\DB;
 class InvoiceFactory extends Factory
 {
     /**
-     * Define the model's default state: an empty draft for a customer of the same user.
+     * Define the model's default state: an empty draft for a customer of the same business.
      *
      * @return array<string, mixed>
      */
     public function definition(): array
     {
         return [
-            'user_id' => User::factory(),
-            'customer_id' => fn (array $attributes) => Customer::factory()->create(['user_id' => $attributes['user_id']])->id,
+            'business_id' => Business::factory(),
+            'customer_id' => fn (array $attributes) => Customer::factory()->create(['business_id' => $attributes['business_id']])->id,
             'status' => InvoiceStatus::Draft,
             'issue_date' => today()->toDateString(),
             'due_date' => today()->addDays(30)->toDateString(),
@@ -70,6 +71,16 @@ class InvoiceFactory extends Factory
         return $this->issued()->state(fn (array $attributes) => [
             'status' => InvoiceStatus::Cancelled,
             'cancelled_at' => now(),
+        ]);
+    }
+
+    /**
+     * Owned by the given user's business.
+     */
+    public function ownedBy(User $user): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'business_id' => $user->businesses()->sole()->getKey(),
         ]);
     }
 }

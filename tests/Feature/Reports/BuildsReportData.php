@@ -31,17 +31,17 @@ trait BuildsReportData
             $factory = $factory->{$state}();
         }
 
-        return $factory->create(['user_id' => ($owner ?? $this->user)->id] + $attributes);
+        return $factory->ownedBy($owner ?? $this->user)->create($attributes);
     }
 
     protected function expense(array $attributes = [], ?User $owner = null): Expense
     {
-        return Expense::factory()->for($owner ?? $this->user)->create($attributes);
+        return Expense::factory()->ownedBy($owner ?? $this->user)->create($attributes);
     }
 
     protected function customer(array $attributes = [], ?User $owner = null): Customer
     {
-        return Customer::factory()->for($owner ?? $this->user)->create($attributes);
+        return Customer::factory()->ownedBy($owner ?? $this->user)->create($attributes);
     }
 
     protected function report(string $route, array $query = [], ?User $as = null): TestResponse

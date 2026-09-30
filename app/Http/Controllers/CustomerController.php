@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\CustomerRequest;
 use App\Models\Customer;
+use App\Support\CurrentBusiness;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controllers\HasMiddleware;
@@ -13,11 +14,13 @@ use Illuminate\View\View;
 
 class CustomerController extends Controller implements HasMiddleware
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Authorize every action through CustomerPolicy.
      *
      * Running as middleware means ownership is checked before a CustomerRequest
-     * is validated, so another user's customer returns 404, never validation errors.
+     * is validated, so another business's customer returns 404, never validation errors.
      */
     public static function middleware(): array
     {
@@ -31,14 +34,14 @@ class CustomerController extends Controller implements HasMiddleware
     }
 
     /**
-     * List the authenticated user's customers, optionally filtered by a search term.
+     * List the current business's customers, optionally filtered by a search term.
      */
     public function index(Request $request): View
     {
         $search = $request->query('search');
         $search = is_string($search) ? Str::limit(trim($search), 100, '') : '';
 
-        $customers = $request->user()->customers()
+        $customers = $this->currentBusiness->get()->customers()
             ->search($search)
             ->orderBy('name')
             ->orderBy('id')
@@ -57,11 +60,11 @@ class CustomerController extends Controller implements HasMiddleware
     }
 
     /**
-     * Store a customer owned by the authenticated user.
+     * Store a customer owned by the current business.
      */
     public function store(CustomerRequest $request): RedirectResponse
     {
-        $customer = $request->user()->customers()->create($request->validated());
+        $customer = $this->currentBusiness->get()->customers()->create($request->validated());
 
         return redirect()->route('customers.show', $customer)
             ->with('status', 'Customer created.');

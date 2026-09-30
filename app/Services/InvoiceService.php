@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\InvoiceStatus;
 use App\Exceptions\InvoiceStateException;
+use App\Models\Business;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\Product;
@@ -15,11 +16,20 @@ use InvalidArgumentException;
 /**
  * The only place invoices and their lines are written.
  *
+ * Every method that creates or reads business data receives the Business
+ * explicitly and loads customers and products only through it.
+ *
  * Totals are always calculated here from the lines; any totals, numbers,
  * statuses or positions a client sends are never used.
  */
 class InvoiceService
 {
+    /**
+     * Attempts for write transactions: MySQL can pick one of two concurrent
+     * transactions as a deadlock victim, and the whole transaction is safe to retry.
+     */
+    private const TRANSACTION_ATTEMPTS = 3;
+
     public function __construct(
         private readonly InvoiceCalculator $calculator,
         private readonly InvoiceNumberGenerator $numbers,
@@ -28,21 +38,29 @@ class InvoiceService
     /**
      * Create or update a draft from validated input.
      *
+     * The customer and any products must belong to the business; anything else
+     * fails here even if validation was bypassed. $creator is recorded as created_by
+     * on a new draft (null for system-generated invoices) and never changes after.
+     *
      * @param  array<string, mixed>  $data  Validated InvoiceRequest data.
      */
-    public function saveDraft(User $user, array $data, ?Invoice $invoice = null): Invoice
+    public function saveDraft(Business $business, ?User $creator, array $data, ?Invoice $invoice = null): Invoice
     {
-        return DB::transaction(function () use ($user, $data, $invoice) {
+        return DB::transaction(function () use ($business, $creator, $data, $invoice) {
             if ($invoice === null) {
-                $invoice = $user->invoices()->make();
-                $invoice->forceFill(['status' => InvoiceStatus::Draft]);
+                $invoice = $business->invoices()->make();
+                $invoice->forceFill([
+                    'status' => InvoiceStatus::Draft,
+                    'created_by' => $creator?->getKey(),
+                ]);
             } else {
                 $invoice = $this->lockedFresh($invoice);
+                $this->ensureBelongsTo($invoice, $business);
                 $this->ensureStatus($invoice, InvoiceStatus::Draft, 'Only draft invoices can be edited.');
             }
 
-            $customer = $user->customers()->findOrFail($data['customer_id']);
-            $lines = $this->resolveLines($user, $data['items'], $invoice->exists ? $invoice : null);
+            $customer = $business->customers()->findOrFail($data['customer_id']);
+            $lines = $this->resolveLines($business, $data['items'], $invoice->exists ? $invoice : null);
             $totals = $this->calculator->calculate($lines, $data['discount_amount'] ?? '0', $data['tax_rate'] ?? '0');
 
             $invoice->fill([
@@ -56,9 +74,14 @@ class InvoiceService
             $this->copyCustomer($invoice, $customer);
             $this->applyTotals($invoice, $totals);
             $invoice->forceFill(['currency_code' => config('bizflow.currency.code')]);
+            $isNew = ! $invoice->exists;
             $invoice->save();
 
-            $invoice->items()->reorder()->delete();
+            // A new draft has no lines. Skipping the delete also avoids a MySQL gap lock that
+            // made two drafts created at the same moment deadlock on inserting their lines.
+            if (! $isNew) {
+                $invoice->items()->reorder()->delete();
+            }
 
             foreach ($lines as $index => $line) {
                 $item = $invoice->items()->make($line);
@@ -70,7 +93,7 @@ class InvoiceService
             }
 
             return $invoice->load('items');
-        });
+        }, self::TRANSACTION_ATTEMPTS);
     }
 
     /**
@@ -108,7 +131,7 @@ class InvoiceService
             ])->save();
 
             return $invoice;
-        });
+        }, self::TRANSACTION_ATTEMPTS);
     }
 
     /**
@@ -155,19 +178,19 @@ class InvoiceService
      *
      * A selected product fills any blank name, description, unit and price;
      * values the user typed are kept. Products are only ever loaded through the
-     * user's own catalogue, and cost_price is never copied.
+     * business's own catalogue, and cost_price is never copied.
      *
      * Inactive products are refused unless the line keeps a product already on this draft.
      *
      * @param  list<array<string, mixed>>  $items
      * @return list<array{product_id: int|null, name: string, description: string|null, unit: string|null, quantity: string, unit_price: string}>
      */
-    public function resolveLines(User $user, array $items, ?Invoice $invoice = null): array
+    public function resolveLines(Business $business, array $items, ?Invoice $invoice = null): array
     {
         // Keep the submitted order: validated() can rebuild the array in a different key order.
         ksort($items);
 
-        $products = $this->ownedProducts($user, $items);
+        $products = $this->ownedProducts($business, $items);
         $existingProductIds = $invoice?->items()->pluck('product_id')->filter()->all() ?? [];
 
         return array_values(array_map(function (array $item) use ($products, $existingProductIds) {
@@ -175,7 +198,7 @@ class InvoiceService
             $product = $productId === null ? null : $products->get($productId);
 
             if ($productId !== null && $product === null) {
-                throw new InvalidArgumentException('Invoice lines may only use the user\'s own products.');
+                throw new InvalidArgumentException('Invoice lines may only use the business\'s own products.');
             }
 
             if ($product !== null && ! $product->is_active && ! in_array($product->id, $existingProductIds, true)) {
@@ -194,12 +217,12 @@ class InvoiceService
     }
 
     /**
-     * Load the products referenced by the lines, scoped to the user's catalogue.
+     * Load the products referenced by the lines, scoped to the business's catalogue.
      *
      * @param  list<array<string, mixed>>  $items
      * @return Collection<int, Product>
      */
-    public function ownedProducts(User $user, array $items): Collection
+    public function ownedProducts(Business $business, array $items): Collection
     {
         $ids = collect($items)->pluck('product_id')->filter()->map(fn ($id) => (int) $id)->unique()->values();
 
@@ -207,7 +230,7 @@ class InvoiceService
             return collect();
         }
 
-        return $user->products()->whereKey($ids)->get()->keyBy('id');
+        return $business->products()->whereKey($ids)->get()->keyBy('id');
     }
 
     /**
@@ -267,6 +290,16 @@ class InvoiceService
     private function lockedFresh(Invoice $invoice): Invoice
     {
         return Invoice::query()->whereKey($invoice->getKey())->lockForUpdate()->firstOrFail();
+    }
+
+    /**
+     * Refuse to change another business's invoice, whatever the caller checked.
+     */
+    private function ensureBelongsTo(Invoice $invoice, Business $business): void
+    {
+        if ((int) $invoice->business_id !== (int) $business->getKey()) {
+            throw new InvalidArgumentException('The invoice does not belong to this business.');
+        }
     }
 
     private function ensureStatus(Invoice $invoice, InvoiceStatus $status, string $message): void

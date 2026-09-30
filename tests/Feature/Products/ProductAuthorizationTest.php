@@ -70,7 +70,7 @@ class ProductAuthorizationTest extends TestCase
     {
         $product = Product::factory()->create();
 
-        $this->actingAs($product->user)->get(route($route, $product))->assertOk();
+        $this->actingAs($this->ownerOf($product))->get(route($route, $product))->assertOk();
     }
 
     public function test_users_cannot_update_another_users_item(): void

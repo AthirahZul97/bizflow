@@ -83,7 +83,7 @@ class InvoiceLifecycleTest extends TestCase
     {
         $user = User::factory()->create();
         $customer = $this->customerFor($user, ['name' => 'Original Customer']);
-        $product = Product::factory()->for($user)->create(['name' => 'Original Product', 'selling_price' => '100.00']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Original Product', 'selling_price' => '100.00']);
         $invoice = app(InvoiceService::class)->issue(
             $this->draftFor($user, $customer, [['product_id' => $product->id, 'quantity' => '1']])
         );
@@ -123,7 +123,7 @@ class InvoiceLifecycleTest extends TestCase
     {
         $draft = Invoice::factory()->create();
 
-        $this->actingAs($draft->user)
+        $this->actingAs($this->ownerOf($draft))
             ->from(route('invoices.show', $draft))
             ->post(route('invoices.issue', $draft))
             ->assertRedirect(route('invoices.show', $draft))
@@ -209,7 +209,7 @@ class InvoiceLifecycleTest extends TestCase
             $this->assertSame($before, $this->lifecycleState($invoice));
             $this->assertSame('cancelled', $before['status']);
             $this->assertSame('INV-00001', $before['invoice_number']);
-            $this->assertSame(1, (int) $user->invoices()->max('invoice_sequence'));
+            $this->assertSame(1, (int) $this->businessOf($user)->invoices()->max('invoice_sequence'));
         }
     }
 
@@ -245,7 +245,7 @@ class InvoiceLifecycleTest extends TestCase
 
         $cancelled = $service->cancel($unpaid);
         $this->assertSame([InvoiceStatus::Cancelled, 'INV-00001'], [$cancelled->status, $cancelled->invoice_number]);
-        $this->assertSame(1, (int) $user->invoices()->max('invoice_sequence'));
+        $this->assertSame(1, (int) $this->businessOf($user)->invoices()->max('invoice_sequence'));
     }
 
     public function test_issued_invoices_can_be_marked_paid_and_unpaid(): void

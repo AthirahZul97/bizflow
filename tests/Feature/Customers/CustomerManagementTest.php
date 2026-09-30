@@ -4,6 +4,7 @@ namespace Tests\Feature\Customers;
 
 use App\Models\Customer;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -35,7 +36,7 @@ class CustomerManagementTest extends TestCase
     public function test_index_lists_only_the_users_own_customers(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'My Customer']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'My Customer']);
         Customer::factory()->create(['name' => 'Someone Elses Customer']);
 
         $response = $this->actingAs($user)->get(route('customers.index'));
@@ -62,19 +63,22 @@ class CustomerManagementTest extends TestCase
         $customer = Customer::sole();
         $response->assertRedirect(route('customers.show', $customer));
         $response->assertSessionHas('status', 'Customer created.');
-        $this->assertTrue($customer->user->is($user));
-        $this->assertDatabaseHas('customers', ['user_id' => $user->id] + $this->validPayload());
+        $this->assertTrue($this->ownerOf($customer)->is($user));
+        $this->assertDatabaseHas('customers', ['business_id' => $this->businessOf($user)->id] + $this->validPayload());
     }
 
-    public function test_forged_user_id_is_ignored_on_create(): void
+    public function test_forged_business_id_is_ignored_on_create(): void
     {
         $user = User::factory()->create();
         $victim = User::factory()->create();
 
-        $this->actingAs($user)->post(route('customers.store'), $this->validPayload(['user_id' => $victim->id]));
+        $this->actingAs($user)->post(route('customers.store'), $this->validPayload([
+            'business_id' => $this->businessOf($victim)->id,
+            'user_id' => $victim->id,
+        ]));
 
-        $this->assertSame($user->id, Customer::sole()->user_id);
-        $this->assertSame(0, $victim->customers()->count());
+        $this->assertSame($this->businessOf($user)->id, Customer::sole()->business_id);
+        $this->assertSame(0, $this->businessOf($victim)->customers()->count());
     }
 
     public function test_non_fillable_attributes_are_ignored_on_create(): void
@@ -156,7 +160,7 @@ class CustomerManagementTest extends TestCase
     {
         $customer = Customer::factory()->create(['name' => 'Old Name']);
 
-        $response = $this->actingAs($customer->user)->put(
+        $response = $this->actingAs($this->ownerOf($customer))->put(
             route('customers.update', $customer),
             $this->validPayload(['name' => 'New Name', 'city' => 'Penang']),
         );
@@ -171,22 +175,22 @@ class CustomerManagementTest extends TestCase
     public function test_update_cannot_change_the_owner(): void
     {
         $customer = Customer::factory()->create();
-        $owner = $customer->user;
+        $owner = $this->ownerOf($customer);
         $other = User::factory()->create();
 
         $this->actingAs($owner)->put(
             route('customers.update', $customer),
-            $this->validPayload(['user_id' => $other->id]),
+            $this->validPayload(['business_id' => $this->businessOf($other)->id, 'user_id' => $other->id]),
         );
 
-        $this->assertSame($owner->id, $customer->fresh()->user_id);
+        $this->assertSame($customer->business_id, $customer->fresh()->business_id);
     }
 
     public function test_update_validates_input(): void
     {
         $customer = Customer::factory()->create(['name' => 'Keep Me']);
 
-        $response = $this->actingAs($customer->user)
+        $response = $this->actingAs($this->ownerOf($customer))
             ->from(route('customers.edit', $customer))
             ->put(route('customers.update', $customer), ['name' => '']);
 
@@ -198,7 +202,7 @@ class CustomerManagementTest extends TestCase
     public function test_detail_page_shows_the_customer(): void
     {
         $user = User::factory()->create();
-        $customer = $user->customers()->create($this->validPayload());
+        $customer = $this->businessOf($user)->customers()->create($this->validPayload());
 
         $response = $this->actingAs($user)->get(route('customers.show', $customer));
 
@@ -216,14 +220,14 @@ class CustomerManagementTest extends TestCase
             'notes' => "<script>alert('xss')</script>\nSecond line",
         ]);
 
-        $response = $this->actingAs($customer->user)->get(route('customers.show', $customer));
+        $response = $this->actingAs($this->ownerOf($customer))->get(route('customers.show', $customer));
 
         $response->assertDontSee("<script>alert('xss')</script>", false);
         $response->assertDontSee('<b>Bold Co</b>', false);
         $response->assertSee('&lt;script&gt;', false);
         $response->assertSee('<br />', false);
 
-        $this->actingAs($customer->user)->get(route('customers.index'))
+        $this->actingAs($this->ownerOf($customer))->get(route('customers.index'))
             ->assertDontSee('<b>Bold Co</b>', false);
     }
 
@@ -231,7 +235,7 @@ class CustomerManagementTest extends TestCase
     {
         $customer = Customer::factory()->create(['name' => 'Still Here']);
 
-        $response = $this->actingAs($customer->user)->get(route('customers.delete', $customer));
+        $response = $this->actingAs($this->ownerOf($customer))->get(route('customers.delete', $customer));
 
         $response->assertOk();
         $response->assertSee('Still Here');
@@ -243,21 +247,28 @@ class CustomerManagementTest extends TestCase
     {
         $customer = Customer::factory()->create();
 
-        $response = $this->actingAs($customer->user)->delete(route('customers.destroy', $customer));
+        $response = $this->actingAs($this->ownerOf($customer))->delete(route('customers.destroy', $customer));
 
         $response->assertRedirect(route('customers.index'));
         $response->assertSessionHas('status', 'Customer deleted.');
         $this->assertModelMissing($customer);
     }
 
-    public function test_deleting_a_user_deletes_their_customers(): void
+    public function test_deleting_the_business_owner_is_blocked_and_keeps_the_customers(): void
     {
         $customer = Customer::factory()->create();
-        $untouched = Customer::factory()->create();
 
-        $customer->user->delete();
+        $this->assertThrows(fn () => $this->ownerOf($customer)->delete(), QueryException::class);
 
-        $this->assertModelMissing($customer);
-        $this->assertModelExists($untouched);
+        $this->assertModelExists($customer);
+    }
+
+    public function test_a_business_with_customers_cannot_be_deleted(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $this->assertThrows(fn () => $customer->business->delete(), QueryException::class);
+
+        $this->assertModelExists($customer);
     }
 }

@@ -57,6 +57,10 @@
                             </a>
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li>
+                                    <a class="dropdown-item @if (request()->routeIs('business.profile.*')) active @endif" href="{{ route('business.profile.edit') }}">Business profile</a>
+                                </li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li>
                                     <form method="POST" action="{{ route('logout') }}">
                                         @csrf
                                         <button type="submit" class="dropdown-item">Log out</button>

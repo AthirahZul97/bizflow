@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\CurrentBusiness;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\ServiceProvider;
 
@@ -12,7 +13,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // One per request (or queued job): the tenant the HTTP layer works in.
+        $this->app->scoped(CurrentBusiness::class);
     }
 
     /**

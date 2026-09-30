@@ -4,10 +4,13 @@ namespace App\Policies;
 
 use App\Models\Expense;
 use App\Models\User;
+use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class ExpensePolicy
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Any authenticated user may list expenses; the query itself is scoped to them.
      */
@@ -40,11 +43,11 @@ class ExpensePolicy
     }
 
     /**
-     * Another user's expense is reported as not found, so record IDs cannot be probed.
+     * Another business's expense is reported as not found, so record IDs cannot be probed.
      */
     private function owns(User $user, Expense $expense): Response
     {
-        return $expense->user()->is($user)
+        return $this->currentBusiness->owns($user, $expense)
             ? Response::allow()
             : Response::denyAsNotFound();
     }

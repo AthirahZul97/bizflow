@@ -2,19 +2,21 @@
 
 namespace App\Services;
 
+use App\Models\Business;
 use App\Models\Invoice;
-use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 
 class InvoiceNumberGenerator
 {
     /**
-     * Give the invoice its owner's next number, e.g. INV-00001. Does not save.
+     * Give the invoice its business's next number, e.g. INV-00001. Does not save.
      *
-     * Must run inside a transaction: the owner's row is locked so concurrent
-     * issues for the same user are serialized. The unique (user_id,
-     * invoice_sequence) and (user_id, invoice_number) indexes are the backstop.
+     * Must run inside a transaction: the business's row is locked so concurrent
+     * issues within the same business are serialized (callers lock the invoice
+     * row first, then the business row, always in that order). The unique
+     * (business_id, invoice_sequence) and (business_id, invoice_number) indexes
+     * are the backstop. Each business has its own sequence starting at 1.
      * Numbers are never reused because issued invoices cannot be deleted, and an
      * invoice that already has a number is refused.
      */
@@ -29,9 +31,12 @@ class InvoiceNumberGenerator
             throw new LogicException('This invoice already has a number and cannot be renumbered.');
         }
 
-        $user = User::query()->whereKey($invoice->user_id)->lockForUpdate()->firstOrFail();
+        $business = Business::query()->whereKey($invoice->business_id)->lockForUpdate()->firstOrFail();
 
-        $sequence = (int) $user->invoices()->max('invoice_sequence') + 1;
+        // A locking read: under REPEATABLE READ a plain SELECT would use the snapshot taken
+        // at the transaction's first read (before waiting for the lock above) and miss a
+        // number another transaction has just committed.
+        $sequence = (int) $business->invoices()->lockForUpdate()->max('invoice_sequence') + 1;
 
         $invoice->forceFill([
             'invoice_sequence' => $sequence,

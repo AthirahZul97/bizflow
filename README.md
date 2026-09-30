@@ -4,10 +4,12 @@ BizFlow is a small-business management MVP built with Laravel. A business owner 
 their customers and their catalogue of products and services, create and track invoices,
 record expenses, and follow the business through a dashboard and period reports.
 
-Every business record belongs to one user. Users only ever see and change their own data.
+Every business record belongs to one **business** (the tenant). A user works in their business
+and only ever sees and changes that business's data.
 
 > **Status:** MVP complete: Authentication, Customers, Products / Services, Invoices,
-> Expenses, Dashboard and Reports. See [Known limitations and future scope](#known-limitations-and-future-scope).
+> Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download and the business
+> tenancy foundation with a business profile. See [Known limitations and future scope](#known-limitations-and-future-scope).
 
 ## Tech stack
 
@@ -32,13 +34,22 @@ Other versions may work but have not been verified.
 - Passwords are hashed by the model's `hashed` cast; "remember me" is supported.
 - Login is limited to 5 failed attempts per email and IP; registration to 6 requests a minute.
 - The session is regenerated after login and registration.
+- Registration asks for a **business name** and creates the user, their business and their
+  owner membership in one transaction: if any part fails, nothing is kept.
+
+### Business profile
+- Each account has one business, with the user as its owner. Only the name is required; address,
+  registration number, SST number, email and phone are optional.
+- The profile (user menu → **Business profile**) is shown as the seller on invoices and PDFs.
+  Seller details are read live from the profile, so editing it also changes the seller block of
+  existing invoices; customer and line details stay as copied onto each invoice.
 
 ### Customers
 - Create, view, edit and delete customers, with search and pagination.
 - A customer who has invoices cannot be deleted (their invoices keep referring to them).
 
 ### Products / Services
-- One catalogue with a **product** or **service** type, optional SKU (unique per user,
+- One catalogue with a **product** or **service** type, optional SKU (unique per business,
   stored upper-case), unit, selling price and an internal, optional cost price.
 - Items can be marked inactive: they stay on existing invoices but cannot be added to new ones.
 - An item used on any invoice cannot be deleted (mark it inactive instead).
@@ -49,7 +60,7 @@ Other versions may work but have not been verified.
   ("mark as unpaid", to correct a mistaken payment). Nothing else is allowed.
 - Only drafts can be edited or deleted. Issued invoices are fixed; to correct one, cancel it
   and create a new invoice. Cancelled invoices are kept.
-- Numbers such as `INV-00001` are assigned per user **when an invoice is issued**, so drafts use
+- Numbers such as `INV-00001` are assigned per business **when an invoice is issued**, so drafts use
   no number and issued numbers have no gaps and never change.
 - Lines can come from the catalogue or be typed in manually. A fixed discount and one
   invoice-level tax rate (with an optional label such as "SST") are supported; no tax rules are built in.
@@ -58,7 +69,7 @@ Other versions may work but have not been verified.
 - Printable invoice view (browser print).
 - **Download PDF** for issued, paid and cancelled invoices (`GET /invoices/{invoice}/pdf`, saved as
   e.g. `INV-00001.pdf`). Drafts have no PDF; cancelled PDFs are clearly marked `CANCELLED`. The PDF
-  uses only the details copied onto the invoice and is rendered by DomPDF with remote access, PHP and
+  uses the details copied onto the invoice plus the business profile, and is rendered by DomPDF with remote access, PHP and
   JavaScript disabled and file access limited to its bundled fonts.
 
 ### Expenses
@@ -119,17 +130,35 @@ cost price is never copied. Reports group customers by `customer_id` but display
 billed on that customer's most recent invoice.
 
 ### Tenant isolation
-- Every business table has a `user_id`. Queries start from the signed-in user's relationships
-  (`$user->invoices()`, `$user->customers()`, …), never from unscoped model queries.
-- Policies check ownership as route middleware, **before** form validation. Another user's
-  record returns **404**, so record IDs cannot be probed.
-- `user_id` is never mass-assignable or validated from input. Submitted customer and product IDs
-  must belong to the signed-in user; otherwise validation fails.
+- The **business** is the tenant. `customers`, `products`, `invoices` and `expenses` each have a
+  required `business_id`; invoice lines belong to their invoice. Users belong to businesses
+  through `business_user` memberships with a role (only `owner` exists for now).
+- The HTTP layer gets the business from `App\Support\CurrentBusiness` (resolved once per request
+  from the user's membership). Queries start from it (`$business->invoices()`, …), never from
+  unscoped model queries; there are no global scopes. Services receive the `Business` explicitly.
+  Users have no direct customer/product/invoice/expense relationships.
+- Policies check membership of the current business and record ownership as route middleware,
+  **before** form validation. Another business's record returns **404**, so record IDs cannot be probed.
+- `business_id` is never mass-assignable or validated from input. Submitted customer and product
+  IDs must belong to the current business: validation rejects them, the invoice service refuses
+  them, and a composite foreign key `invoices (business_id, customer_id) → customers (business_id, id)`
+  makes a cross-business customer impossible in the database.
+- `invoices.created_by` and `expenses.created_by` record who created the record. They are audit
+  metadata only (`NULL` means system-generated or no associated person) and are never used for
+  access or filtering. Deleting that user clears the column; it never deletes the record.
+- Deleting a user who owns a business, or a business that still has records, is refused by the
+  database.
+
+The move from per-user to per-business ownership is a staged migration (`2026_09_29_1000xx` to
+`1006xx`): businesses are backfilled one per existing user, `business_id` is backfilled and
+verified before any destructive step, and then the keys are rebuilt. The last two migrations
+cannot be rolled back; the recovery path is restoring a backup taken before migrating.
 
 ### Invoice numbering
-Numbers are assigned inside a database transaction that locks the user's row, so two invoices
-issued at the same moment cannot get the same number. Unique `(user_id, invoice_number)` and
-`(user_id, invoice_sequence)` indexes back this up. An invoice that already has a number is
+Each business has its own sequence starting at `INV-00001`. Numbers are assigned inside a
+database transaction that locks the business's row, so two invoices issued at the same moment
+in one business cannot get the same number. Unique `(business_id, invoice_number)` and
+`(business_id, invoice_sequence)` indexes back this up. An invoice that already has a number is
 never renumbered, and issuing re-checks that the invoice is still a draft under the lock.
 
 ### Dates
@@ -230,8 +259,12 @@ These are outside the MVP by design, not bugs:
 
 Current limitations:
 
-- There is no account deletion feature. Deleting a user who has invoices is intentionally
-  blocked by the database: invoices restrict deleting the customers and products they reference.
+- There is no account deletion feature. Deleting a business owner, or a business that has
+  records, is intentionally blocked by the database.
+- One business per user, with a single owner. There are no invitations, other roles or business
+  switching yet.
+- Seller details are not copied onto invoices, so editing the business profile also changes the
+  seller block of existing invoices and their PDFs.
 - "Paid" means marked as paid in full by the user; there are no payment records.
 - Reports and the dashboard show invoice totals including tax; tax is not reported separately.
 

@@ -2,9 +2,14 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Enums\BusinessRole;
+use App\Models\Business;
+use App\Models\BusinessMembership;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use RuntimeException;
 use Tests\TestCase;
 
 class RegistrationTest extends TestCase
@@ -18,6 +23,7 @@ class RegistrationTest extends TestCase
     {
         return array_merge([
             'name' => 'Aisha Rahman',
+            'business_name' => 'Rahman Trading',
             'email' => 'aisha@example.com',
             'password' => 'secret-pass-123',
             'password_confirmation' => 'secret-pass-123',
@@ -31,6 +37,7 @@ class RegistrationTest extends TestCase
         $response->assertOk();
         $response->assertSee('Create your account');
         $response->assertSee('name="_token"', false);
+        $response->assertSee('name="business_name"', false);
     }
 
     public function test_new_users_can_register_and_are_logged_in(): void
@@ -84,7 +91,7 @@ class RegistrationTest extends TestCase
         $response = $this->from(route('register'))->post(route('register'), []);
 
         $response->assertRedirect(route('register'));
-        $response->assertSessionHasErrors(['name', 'email', 'password']);
+        $response->assertSessionHasErrors(['name', 'business_name', 'email', 'password']);
         $this->assertGuest();
     }
 
@@ -155,6 +162,69 @@ class RegistrationTest extends TestCase
         }
 
         $this->post(route('register'), [])->assertTooManyRequests();
+    }
+
+    public function test_registration_creates_the_business_with_the_user_as_its_owner(): void
+    {
+        $this->post(route('register'), $this->validPayload(['business_name' => '  Rahman Trading Sdn Bhd  ']));
+
+        $user = User::sole();
+        $business = Business::sole();
+        $this->assertSame('Rahman Trading Sdn Bhd', $business->name);
+        $this->assertTrue($business->hasMember($user, BusinessRole::Owner));
+        $this->assertSame(1, $user->businesses()->count());
+        $this->assertNull($business->registration_number);
+
+        // The new account works straight away, in its own business.
+        $this->get(route('dashboard'))->assertOk();
+        $this->get(route('business.profile.edit'))->assertOk()->assertSee('Rahman Trading Sdn Bhd');
+    }
+
+    public function test_business_name_is_validated(): void
+    {
+        $this->from(route('register'))->post(route('register'), $this->validPayload(['business_name' => '   ']))
+            ->assertSessionHasErrors(['business_name' => 'The business name field is required.']);
+        $this->from(route('register'))->post(route('register'), $this->validPayload(['business_name' => str_repeat('a', 256)]))
+            ->assertSessionHasErrors('business_name');
+
+        $this->assertSame(0, User::count());
+        $this->assertSame(0, Business::count());
+        $this->assertGuest();
+    }
+
+    public function test_a_failure_creating_the_business_keeps_nothing_and_logs_nobody_in(): void
+    {
+        Business::creating(fn () => throw new RuntimeException('Simulated failure'));
+
+        $response = $this->post(route('register'), $this->validPayload());
+
+        $response->assertServerError();
+        $this->assertSame(0, User::count());
+        $this->assertSame(0, Business::count());
+        $this->assertSame(0, DB::table('business_user')->count());
+        $this->assertGuest();
+    }
+
+    public function test_a_failure_creating_the_membership_keeps_nothing(): void
+    {
+        BusinessMembership::creating(fn () => throw new RuntimeException('Simulated failure'));
+
+        $this->post(route('register'), $this->validPayload())->assertServerError();
+
+        $this->assertSame(0, User::count());
+        $this->assertSame(0, Business::count());
+        $this->assertGuest();
+    }
+
+    public function test_forged_business_fields_are_ignored(): void
+    {
+        $existing = Business::factory()->create();
+
+        $this->post(route('register'), $this->validPayload(['business_id' => $existing->id, 'role' => 'admin']));
+
+        $user = User::where('email', 'aisha@example.com')->sole();
+        $this->assertFalse($existing->hasMember($user));
+        $this->assertSame(BusinessRole::Owner, $user->businesses()->sole()->pivot->role);
     }
 
     public function test_authenticated_users_cannot_view_registration_screen(): void

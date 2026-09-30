@@ -28,8 +28,8 @@ class ProductSearchTest extends TestCase
     public function test_items_can_be_searched_by_field(string $field, string $value, string $term): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Target Item', $field => $value]);
-        Product::factory()->for($user)->create(['name' => 'Unrelated Item', 'sku' => null, 'description' => null]);
+        Product::factory()->ownedBy($user)->create(['name' => 'Target Item', $field => $value]);
+        Product::factory()->ownedBy($user)->create(['name' => 'Unrelated Item', 'sku' => null, 'description' => null]);
 
         $response = $this->actingAs($user)->get(route('products.index', ['search' => $term]));
 
@@ -41,7 +41,7 @@ class ProductSearchTest extends TestCase
     public function test_search_never_returns_another_users_items(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Consultation Mine']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Consultation Mine']);
         Product::factory()->create([
             'name' => 'Consultation Theirs',
             'sku' => 'CONSULTATION',
@@ -57,7 +57,7 @@ class ProductSearchTest extends TestCase
     public function test_search_is_case_insensitive(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'WEBSITE Development']);
+        Product::factory()->ownedBy($user)->create(['name' => 'WEBSITE Development']);
 
         $this->actingAs($user)->get(route('products.index', ['search' => 'website']))
             ->assertSee('WEBSITE Development');
@@ -66,12 +66,12 @@ class ProductSearchTest extends TestCase
     public function test_like_wildcards_and_escape_character_are_matched_literally(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Promo 50% Off']);
-        Product::factory()->for($user)->create(['name' => 'Promo 500 Off']);
-        Product::factory()->for($user)->create(['name' => 'Kit A_B']);
-        Product::factory()->for($user)->create(['name' => 'Kit AXB']);
-        Product::factory()->for($user)->create(['name' => 'Wow! Deal']);
-        Product::factory()->for($user)->create(['name' => 'Wow Deal']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Promo 50% Off']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Promo 500 Off']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Kit A_B']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Kit AXB']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Wow! Deal']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Wow Deal']);
 
         $this->actingAs($user)->get(route('products.index', ['search' => '50%']))
             ->assertSee('Promo 50% Off')
@@ -89,8 +89,8 @@ class ProductSearchTest extends TestCase
     public function test_items_can_be_filtered_by_type(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Laptop Stand']);
-        Product::factory()->for($user)->service()->create(['name' => 'Consultation']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Laptop Stand']);
+        Product::factory()->ownedBy($user)->service()->create(['name' => 'Consultation']);
 
         $this->actingAs($user)->get(route('products.index', ['type' => 'service']))
             ->assertSee('Consultation')
@@ -104,8 +104,8 @@ class ProductSearchTest extends TestCase
     public function test_items_can_be_filtered_by_status(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Current Offer']);
-        Product::factory()->for($user)->inactive()->create(['name' => 'Retired Offer']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Current Offer']);
+        Product::factory()->ownedBy($user)->inactive()->create(['name' => 'Retired Offer']);
 
         $this->actingAs($user)->get(route('products.index'))
             ->assertSee('Current Offer')
@@ -123,10 +123,10 @@ class ProductSearchTest extends TestCase
     public function test_search_and_filters_combine(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->service()->create(['name' => 'Web Hosting']);
-        Product::factory()->for($user)->service()->inactive()->create(['name' => 'Web Legacy Support']);
-        Product::factory()->for($user)->create(['name' => 'Web Camera']);
-        Product::factory()->for($user)->service()->create(['name' => 'Consultation']);
+        Product::factory()->ownedBy($user)->service()->create(['name' => 'Web Hosting']);
+        Product::factory()->ownedBy($user)->service()->inactive()->create(['name' => 'Web Legacy Support']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Web Camera']);
+        Product::factory()->ownedBy($user)->service()->create(['name' => 'Consultation']);
 
         $this->actingAs($user)->get(route('products.index', ['search' => 'Web', 'type' => 'service', 'status' => 'active']))
             ->assertSee('Web Hosting')
@@ -138,7 +138,7 @@ class ProductSearchTest extends TestCase
     public function test_invalid_filter_values_are_ignored(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Visible Item']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Visible Item']);
 
         $this->actingAs($user)->get(route('products.index', ['type' => 'bundle', 'status' => 'deleted', 'search' => ['x']]))
             ->assertOk()
@@ -148,9 +148,9 @@ class ProductSearchTest extends TestCase
     public function test_items_are_sorted_by_name(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Charlie Item']);
-        Product::factory()->for($user)->create(['name' => 'Alpha Item']);
-        Product::factory()->for($user)->create(['name' => 'Bravo Item']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Charlie Item']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Alpha Item']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Bravo Item']);
 
         $this->actingAs($user)->get(route('products.index'))
             ->assertSeeInOrder(['Alpha Item', 'Bravo Item', 'Charlie Item']);
@@ -160,7 +160,7 @@ class ProductSearchTest extends TestCase
     {
         $user = User::factory()->create();
         foreach (range(1, 16) as $i) {
-            Product::factory()->for($user)->create(['name' => sprintf('Item %02d', $i)]);
+            Product::factory()->ownedBy($user)->create(['name' => sprintf('Item %02d', $i)]);
         }
 
         $this->actingAs($user)->get(route('products.index'))
@@ -176,7 +176,7 @@ class ProductSearchTest extends TestCase
     {
         $user = User::factory()->create();
         foreach (range(1, 16) as $i) {
-            Product::factory()->for($user)->service()->create(['name' => sprintf('Web %02d', $i)]);
+            Product::factory()->ownedBy($user)->service()->create(['name' => sprintf('Web %02d', $i)]);
         }
 
         $this->actingAs($user)->get(route('products.index', ['search' => 'Web', 'type' => 'service', 'status' => 'active']))
@@ -196,7 +196,7 @@ class ProductSearchTest extends TestCase
     public function test_empty_state_is_shown_when_filters_have_no_matches(): void
     {
         $user = User::factory()->create();
-        Product::factory()->for($user)->create(['name' => 'Existing Item']);
+        Product::factory()->ownedBy($user)->create(['name' => 'Existing Item']);
 
         $this->actingAs($user)->get(route('products.index', ['type' => 'service']))
             ->assertOk()

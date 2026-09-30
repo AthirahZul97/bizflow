@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\ProductType;
 use App\Http\Requests\ProductRequest;
 use App\Models\Product;
+use App\Support\CurrentBusiness;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controllers\HasMiddleware;
@@ -14,11 +15,13 @@ use Illuminate\View\View;
 
 class ProductController extends Controller implements HasMiddleware
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Authorize every action through ProductPolicy.
      *
      * Running as middleware means ownership is checked before a ProductRequest
-     * is validated, so another user's item returns 404, never validation errors.
+     * is validated, so another business's item returns 404, never validation errors.
      */
     public static function middleware(): array
     {
@@ -32,7 +35,7 @@ class ProductController extends Controller implements HasMiddleware
     }
 
     /**
-     * List the authenticated user's products and services, with optional search and filters.
+     * List the current business's products and services, with optional search and filters.
      */
     public function index(Request $request): View
     {
@@ -45,7 +48,7 @@ class ProductController extends Controller implements HasMiddleware
         $status = $request->query('status');
         $status = in_array($status, ['active', 'inactive'], true) ? $status : null;
 
-        $products = $request->user()->products()
+        $products = $this->currentBusiness->get()->products()
             ->search($search)
             ->when($type, fn ($query) => $query->ofType($type))
             ->when($status, fn ($query) => $query->active($status === 'active'))
@@ -68,11 +71,11 @@ class ProductController extends Controller implements HasMiddleware
     }
 
     /**
-     * Store an item owned by the authenticated user.
+     * Store an item owned by the current business.
      */
     public function store(ProductRequest $request): RedirectResponse
     {
-        $product = $request->user()->products()->create($request->validated());
+        $product = $this->currentBusiness->get()->products()->create($request->validated());
 
         return redirect()->route('products.show', $product)
             ->with('status', $product->type->label().' created.');

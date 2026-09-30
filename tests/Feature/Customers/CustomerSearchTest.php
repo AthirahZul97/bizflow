@@ -29,8 +29,8 @@ class CustomerSearchTest extends TestCase
     public function test_customers_can_be_searched_by_field(string $field, string $value, string $term): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Target Customer', $field => $value]);
-        Customer::factory()->for($user)->create([
+        Customer::factory()->ownedBy($user)->create(['name' => 'Target Customer', $field => $value]);
+        Customer::factory()->ownedBy($user)->create([
             'name' => 'Unrelated Person',
             'company_name' => null,
             'email' => null,
@@ -47,7 +47,7 @@ class CustomerSearchTest extends TestCase
     public function test_search_never_returns_another_users_customers(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Acme Mine']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Acme Mine']);
         Customer::factory()->create(['name' => 'Acme Theirs', 'company_name' => 'Acme', 'email' => 'acme@theirs.test']);
 
         $response = $this->actingAs($user)->get(route('customers.index', ['search' => 'Acme']));
@@ -59,7 +59,7 @@ class CustomerSearchTest extends TestCase
     public function test_search_is_case_insensitive(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'ACME Corporation']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'ACME Corporation']);
 
         $this->actingAs($user)->get(route('customers.index', ['search' => 'acme']))
             ->assertSee('ACME Corporation');
@@ -68,10 +68,10 @@ class CustomerSearchTest extends TestCase
     public function test_like_wildcards_in_search_are_matched_literally(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Promo 50% Off']);
-        Customer::factory()->for($user)->create(['name' => 'Promo 500 Off']);
-        Customer::factory()->for($user)->create(['name' => 'Code A_B']);
-        Customer::factory()->for($user)->create(['name' => 'Code AXB']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Promo 50% Off']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Promo 500 Off']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Code A_B']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Code AXB']);
 
         $this->actingAs($user)->get(route('customers.index', ['search' => '50%']))
             ->assertSee('Promo 50% Off')
@@ -85,7 +85,7 @@ class CustomerSearchTest extends TestCase
     public function test_non_string_search_input_is_ignored(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Visible Customer']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Visible Customer']);
 
         $this->actingAs($user)->get(route('customers.index', ['search' => ['x']]))
             ->assertOk()
@@ -95,9 +95,9 @@ class CustomerSearchTest extends TestCase
     public function test_customers_are_sorted_by_name(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Charlie Co']);
-        Customer::factory()->for($user)->create(['name' => 'Alpha Co']);
-        Customer::factory()->for($user)->create(['name' => 'Bravo Co']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Charlie Co']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Alpha Co']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Bravo Co']);
 
         $this->actingAs($user)->get(route('customers.index'))
             ->assertSeeInOrder(['Alpha Co', 'Bravo Co', 'Charlie Co']);
@@ -107,7 +107,7 @@ class CustomerSearchTest extends TestCase
     {
         $user = User::factory()->create();
         foreach (range(1, 16) as $i) {
-            Customer::factory()->for($user)->create(['name' => sprintf('Customer %02d', $i)]);
+            Customer::factory()->ownedBy($user)->create(['name' => sprintf('Customer %02d', $i)]);
         }
 
         $this->actingAs($user)->get(route('customers.index'))
@@ -123,7 +123,7 @@ class CustomerSearchTest extends TestCase
     {
         $user = User::factory()->create();
         foreach (range(1, 16) as $i) {
-            Customer::factory()->for($user)->create(['name' => sprintf('Acme %02d', $i)]);
+            Customer::factory()->ownedBy($user)->create(['name' => sprintf('Acme %02d', $i)]);
         }
 
         $this->actingAs($user)->get(route('customers.index', ['search' => 'Acme']))
@@ -143,7 +143,7 @@ class CustomerSearchTest extends TestCase
     public function test_empty_state_is_shown_when_search_has_no_matches(): void
     {
         $user = User::factory()->create();
-        Customer::factory()->for($user)->create(['name' => 'Existing Customer']);
+        Customer::factory()->ownedBy($user)->create(['name' => 'Existing Customer']);
 
         $this->actingAs($user)->get(route('customers.index', ['search' => 'Nomatch']))
             ->assertOk()

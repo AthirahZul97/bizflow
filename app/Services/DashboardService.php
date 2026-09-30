@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Enums\ExpenseCategory;
 use App\Enums\InvoiceStatus;
-use App\Models\User;
+use App\Models\Business;
 use App\Support\Money;
 use App\Support\ReportingPeriod;
 use App\Support\SqlMonth;
@@ -14,8 +14,8 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Read-only aggregates for the dashboard. Every query starts from the user's own
- * invoices() or expenses() relationship; nothing here reads another user's rows.
+ * Read-only aggregates for the dashboard. Every query starts from the business's own
+ * invoices() or expenses() relationship; nothing here reads another business's rows.
  *
  * Definitions (see the design):
  *  - Received:    paid invoices, by paid_at, in the period.
@@ -47,38 +47,38 @@ class DashboardService
     /**
      * @return array<string, mixed>
      */
-    public function summary(User $user, ReportingPeriod $period): array
+    public function summary(Business $business, ReportingPeriod $period): array
     {
         $today = today()->toImmutable();
         $todayDate = $today->toDateString();
 
-        $received = $this->countAndSum($user->invoices()
+        $received = $this->countAndSum($business->invoices()
             ->where('status', InvoiceStatus::Paid)
             ->where('paid_at', '>=', $period->startDate())
             ->where('paid_at', '<', $period->endExclusive()), 'total');
 
-        $expenses = $this->countAndSum($user->expenses()
+        $expenses = $this->countAndSum($business->expenses()
             ->where('expense_date', '>=', $period->startDate())
             ->where('expense_date', '<', $period->endExclusive()), 'amount');
 
-        $invoiced = $this->countAndSum($user->invoices()
+        $invoiced = $this->countAndSum($business->invoices()
             ->whereIn('status', [InvoiceStatus::Issued, InvoiceStatus::Paid])
             ->where('issue_date', '>=', $period->startDate())
             ->where('issue_date', '<', $period->endExclusive()), 'total');
 
-        $statuses = $this->statusSummary($user);
-        $due = $this->overdueAndDueSoon($user, $todayDate, $today->addDays(self::DUE_SOON_DAYS)->toDateString());
+        $statuses = $this->statusSummary($business);
+        $due = $this->overdueAndDueSoon($business, $todayDate, $today->addDays(self::DUE_SOON_DAYS)->toDateString());
 
         $issuedCount = $statuses['issued']['count'];
         $issuedAmount = $statuses['issued']['amount'];
 
-        $recentInvoices = $user->invoices()
+        $recentInvoices = $business->invoices()
             ->latest()
             ->orderByDesc('id')
             ->limit(self::LIST_LIMIT)
             ->get(['id', 'invoice_number', 'status', 'customer_name', 'due_date', 'total', 'created_at']);
 
-        $recentExpenses = $user->expenses()
+        $recentExpenses = $business->expenses()
             ->orderByDesc('expense_date')
             ->orderByDesc('id')
             ->limit(self::LIST_LIMIT)
@@ -86,7 +86,7 @@ class DashboardService
 
         $isNewAccount = $recentInvoices->isEmpty()
             && $recentExpenses->isEmpty()
-            && ! $user->customers()->exists();
+            && ! $business->customers()->exists();
 
         return [
             'received' => $received,
@@ -109,15 +109,15 @@ class DashboardService
                 ['label' => 'Cancelled', 'filter' => 'cancelled', 'count' => $statuses['cancelled']['count'], 'amount' => $statuses['cancelled']['amount']],
             ],
             'draftCount' => $statuses['draft']['count'],
-            'overdueInvoices' => $user->invoices()
+            'overdueInvoices' => $business->invoices()
                 ->where('status', InvoiceStatus::Issued)
                 ->where('due_date', '<', $todayDate)
                 ->orderBy('due_date')
                 ->orderBy('id')
                 ->limit(self::LIST_LIMIT)
                 ->get(['id', 'invoice_number', 'status', 'customer_name', 'due_date', 'total']),
-            'categories' => $this->categoryBreakdown($user, $period, $expenses['amount']),
-            'trend' => $this->trend($user, $today),
+            'categories' => $this->categoryBreakdown($business, $period, $expenses['amount']),
+            'trend' => $this->trend($business, $today),
             'recentInvoices' => $recentInvoices,
             'recentExpenses' => $recentExpenses,
             'isNewAccount' => $isNewAccount,
@@ -135,18 +135,18 @@ class DashboardService
     }
 
     /**
-     * All-time count and total per stored status, with zeroes for statuses the user has none of.
+     * All-time count and total per stored status, with zeroes for statuses the business has none of.
      *
      * @return array<string, array{count: int, amount: string}>
      */
-    private function statusSummary(User $user): array
+    private function statusSummary(Business $business): array
     {
         $summary = [];
         foreach (InvoiceStatus::cases() as $status) {
             $summary[$status->value] = ['count' => 0, 'amount' => '0.00'];
         }
 
-        $rows = $user->invoices()
+        $rows = $business->invoices()
             ->groupBy('status')
             ->selectRaw('status, count(*) as aggregate_count, coalesce(sum(total), 0) as aggregate_amount')
             ->toBase()
@@ -165,9 +165,9 @@ class DashboardService
      *
      * @return array{overdueCount: int, overdueAmount: string, soonCount: int, soonAmount: string}
      */
-    private function overdueAndDueSoon(User $user, string $today, string $soonEnd): array
+    private function overdueAndDueSoon(Business $business, string $today, string $soonEnd): array
     {
-        $row = $user->invoices()
+        $row = $business->invoices()
             ->where('status', InvoiceStatus::Issued)
             ->selectRaw(
                 'coalesce(sum(case when due_date < ? then 1 else 0 end), 0) as overdue_count,
@@ -193,11 +193,11 @@ class DashboardService
      *
      * @return list<array{category: ExpenseCategory, amount: string, percent: int}>
      */
-    private function categoryBreakdown(User $user, ReportingPeriod $period, string $periodTotal): array
+    private function categoryBreakdown(Business $business, ReportingPeriod $period, string $periodTotal): array
     {
         $total = BigDecimal::of($periodTotal);
 
-        $rows = $user->expenses()
+        $rows = $business->expenses()
             ->where('expense_date', '>=', $period->startDate())
             ->where('expense_date', '<', $period->endExclusive())
             ->groupBy('category')
@@ -227,13 +227,13 @@ class DashboardService
      *
      * @return list<array{month: CarbonImmutable, current: bool, received: string, expenses: string, net: string}>
      */
-    private function trend(User $user, CarbonImmutable $today): array
+    private function trend(Business $business, CarbonImmutable $today): array
     {
         $firstMonth = $today->startOfMonth()->subMonthsNoOverflow(self::TREND_MONTHS - 1);
         $end = $today->startOfMonth()->addMonthNoOverflow()->toDateString();
 
-        $received = $this->monthlySums($user->invoices()->where('status', InvoiceStatus::Paid), 'paid_at', 'total', $firstMonth->toDateString(), $end);
-        $expenses = $this->monthlySums($user->expenses(), 'expense_date', 'amount', $firstMonth->toDateString(), $end);
+        $received = $this->monthlySums($business->invoices()->where('status', InvoiceStatus::Paid), 'paid_at', 'total', $firstMonth->toDateString(), $end);
+        $expenses = $this->monthlySums($business->expenses(), 'expense_date', 'amount', $firstMonth->toDateString(), $end);
 
         $rows = [];
         for ($i = self::TREND_MONTHS - 1; $i >= 0; $i--) {

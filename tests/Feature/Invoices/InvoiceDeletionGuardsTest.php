@@ -58,7 +58,7 @@ class InvoiceDeletionGuardsTest extends TestCase
     public function test_a_product_used_on_invoices_cannot_be_deleted(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create(['name' => 'Used Item']);
+        $product = Product::factory()->ownedBy($user)->create(['name' => 'Used Item']);
         $this->draftFor($user, items: [['product_id' => $product->id, 'quantity' => '1']]);
 
         $this->actingAs($user)->get(route('products.delete', $product))
@@ -78,7 +78,7 @@ class InvoiceDeletionGuardsTest extends TestCase
     {
         $product = Product::factory()->create();
 
-        $this->actingAs($product->user)->delete(route('products.destroy', $product))
+        $this->actingAs($this->ownerOf($product))->delete(route('products.destroy', $product))
             ->assertRedirect(route('products.index'));
 
         $this->assertModelMissing($product);
@@ -97,7 +97,7 @@ class InvoiceDeletionGuardsTest extends TestCase
     public function test_database_restricts_deleting_a_referenced_product(): void
     {
         $user = User::factory()->create();
-        $product = Product::factory()->for($user)->create();
+        $product = Product::factory()->ownedBy($user)->create();
         $this->draftFor($user, items: [['product_id' => $product->id, 'quantity' => '1']]);
 
         $this->expectException(QueryException::class);

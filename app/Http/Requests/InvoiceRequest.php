@@ -3,10 +3,12 @@
 namespace App\Http\Requests;
 
 use App\Exceptions\InvoiceCalculationException;
+use App\Models\Business;
 use App\Models\Invoice;
 use App\Models\Product;
 use App\Services\InvoiceCalculator;
 use App\Services\InvoiceService;
+use App\Support\CurrentBusiness;
 use Closure;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Collection;
@@ -44,8 +46,9 @@ class InvoiceRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * Status, numbering, currency, totals, positions, copied customer details and
-     * user_id have no rules, so they never reach validated() data.
+     * Status, numbering, currency, totals, positions, copied customer details,
+     * business_id and created_by have no rules, so they never reach validated()
+     * data. The customer and products must belong to the current business.
      *
      * @return array<string, mixed>
      */
@@ -57,7 +60,7 @@ class InvoiceRequest extends FormRequest
             'customer_id' => [
                 'required',
                 'integer',
-                Rule::exists('customers', 'id')->where('user_id', $this->user()->id),
+                Rule::exists('customers', 'id')->where('business_id', $this->business()->getKey()),
             ],
             'issue_date' => ['required', 'date_format:Y-m-d'],
             'due_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:issue_date'],
@@ -117,7 +120,7 @@ class InvoiceRequest extends FormRequest
 
                 try {
                     app(InvoiceCalculator::class)->calculate(
-                        $service->resolveLines($this->user(), $data['items'], $this->invoice()),
+                        $service->resolveLines($this->business(), $data['items'], $this->invoice()),
                         $data['discount_amount'] ?? '0',
                         $data['tax_rate'] ?? '0',
                     );
@@ -157,7 +160,7 @@ class InvoiceRequest extends FormRequest
     }
 
     /**
-     * A product must be in the user's own catalogue, and active unless this
+     * A product must be in the current business's catalogue, and active unless this
      * draft already uses it.
      */
     private function productRule(): Closure
@@ -183,7 +186,12 @@ class InvoiceRequest extends FormRequest
     private function ownedProducts(): Collection
     {
         return $this->products ??= app(InvoiceService::class)
-            ->ownedProducts($this->user(), array_filter((array) $this->input('items'), 'is_array'));
+            ->ownedProducts($this->business(), array_filter((array) $this->input('items'), 'is_array'));
+    }
+
+    private function business(): Business
+    {
+        return app(CurrentBusiness::class)->get();
     }
 
     private function draftUsesProduct(Product $product): bool

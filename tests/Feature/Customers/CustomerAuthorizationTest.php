@@ -69,7 +69,7 @@ class CustomerAuthorizationTest extends TestCase
     {
         $customer = Customer::factory()->create();
 
-        $this->actingAs($customer->user)->get(route($route, $customer))->assertOk();
+        $this->actingAs($this->ownerOf($customer))->get(route($route, $customer))->assertOk();
     }
 
     public function test_users_cannot_update_another_users_customer(): void

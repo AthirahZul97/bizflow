@@ -4,10 +4,13 @@ namespace App\Policies;
 
 use App\Models\Product;
 use App\Models\User;
+use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class ProductPolicy
 {
+    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+
     /**
      * Any authenticated user may list items; the query itself is scoped to them.
      */
@@ -49,11 +52,11 @@ class ProductPolicy
     }
 
     /**
-     * Another user's item is reported as not found, so record IDs cannot be probed.
+     * Another business's item is reported as not found, so record IDs cannot be probed.
      */
     private function owns(User $user, Product $product): Response
     {
-        return $product->user()->is($user)
+        return $this->currentBusiness->owns($user, $product)
             ? Response::allow()
             : Response::denyAsNotFound();
     }

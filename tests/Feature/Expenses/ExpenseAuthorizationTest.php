@@ -71,7 +71,7 @@ class ExpenseAuthorizationTest extends TestCase
     {
         $expense = Expense::factory()->create();
 
-        $this->actingAs($expense->user)->get(route($route, $expense))->assertOk();
+        $this->actingAs($this->ownerOf($expense))->get(route($route, $expense))->assertOk();
     }
 
     public function test_users_cannot_update_another_users_expense(): void

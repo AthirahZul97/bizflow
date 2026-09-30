@@ -25,7 +25,7 @@ class InvoiceAuthorizationTest extends TestCase
             $factory = $factory->{$state}();
         }
 
-        return $factory->create($owner ? ['user_id' => $owner->id] : []);
+        return ($owner ? $factory->ownedBy($owner) : $factory)->create();
     }
 
     /**
@@ -144,7 +144,7 @@ class InvoiceAuthorizationTest extends TestCase
     {
         $invoice = $this->invoiceIn($state);
 
-        $this->actingAs($invoice->user)->get(route($route, $invoice))->assertOk();
+        $this->actingAs($this->ownerOf($invoice))->get(route($route, $invoice))->assertOk();
     }
 
     /**
@@ -189,7 +189,7 @@ class InvoiceAuthorizationTest extends TestCase
             default => [],
         };
 
-        $this->actingAs($invoice->user)->{$method}(route($route, $invoice), $payload)->assertForbidden();
+        $this->actingAs($this->ownerOf($invoice))->{$method}(route($route, $invoice), $payload)->assertForbidden();
 
         $this->assertModelExists($invoice);
         $this->assertSame($before, $invoice->fresh()->getAttributes());
@@ -199,7 +199,7 @@ class InvoiceAuthorizationTest extends TestCase
     {
         $invoice = $this->invoiceIn('issued');
 
-        $this->actingAs($invoice->user)->get(route('invoices.edit', $invoice))
+        $this->actingAs($this->ownerOf($invoice))->get(route('invoices.edit', $invoice))
             ->assertForbidden()
             ->assertSee('Only draft invoices can be edited.');
     }
