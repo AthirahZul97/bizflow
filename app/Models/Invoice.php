@@ -66,6 +66,7 @@ class Invoice extends Model
             'paid_at' => 'date',
             'issued_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'recurring_occurrence_on' => 'date',
             // Only present when loaded with withMax() on the invoice list.
             'last_emailed_at' => 'datetime',
             'subtotal' => 'decimal:2',
@@ -106,6 +107,17 @@ class Invoice extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * The recurring invoice this invoice was generated from, if any. The link is
+     * informational: the recurring invoice never changes a generated invoice.
+     *
+     * @return BelongsTo<RecurringInvoice, $this>
+     */
+    public function recurringInvoice(): BelongsTo
+    {
+        return $this->belongsTo(RecurringInvoice::class);
     }
 
     /**

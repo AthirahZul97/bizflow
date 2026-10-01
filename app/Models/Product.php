@@ -89,6 +89,16 @@ class Product extends Model
     }
 
     /**
+     * Get the recurring invoice lines that use this item. Their existence blocks deleting it.
+     *
+     * @return HasMany<RecurringInvoiceItem, $this>
+     */
+    public function recurringInvoiceItems(): HasMany
+    {
+        return $this->hasMany(RecurringInvoiceItem::class);
+    }
+
+    /**
      * Filter items whose name, SKU or description contains the term.
      *
      * The conditions are grouped so the ORs can never escape an outer business_id

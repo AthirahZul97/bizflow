@@ -9,7 +9,7 @@ and only ever sees and changes that business's data.
 
 > **Status:** MVP complete: Authentication, Customers, Products / Services, Invoices,
 > Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download, the business
-> tenancy foundation with a business profile, and emailing invoices. See [Known limitations and future scope](#known-limitations-and-future-scope).
+> tenancy foundation with a business profile, emailing invoices, and recurring invoices. See [Known limitations and future scope](#known-limitations-and-future-scope).
 
 ## Tech stack
 
@@ -79,6 +79,31 @@ Other versions may work but have not been verified.
   to the business email when the profile has one. Every send is kept in the invoice's **email
   history** (queued, sending, sent, failed or not sent, with the reason), and the invoice list shows
   when an invoice was last emailed. Emailing never changes the invoice.
+
+### Recurring invoices
+- A recurring invoice is a schedule plus an invoice template for one customer: lines, discount, tax,
+  notes and payment terms. On each date of the schedule it creates an ordinary **draft** invoice,
+  dated on that date and due after the payment terms, for you to review, issue and email as usual.
+  Nothing is issued, numbered or emailed automatically.
+- Schedules repeat **weekly, monthly or yearly** from a first invoice date (today or later). Dates
+  are always worked out from that first date, so a schedule starting on the 31st falls on the last
+  day of shorter months (31 Jan, 28 or 29 Feb, 31 Mar, 30 Apr) and one starting on 29 February
+  falls on 28 February in other years. An optional last possible date is inclusive.
+- **Active**, **paused** or **cancelled**. Pausing stops generation; resuming continues from the
+  first date on or after today, skipping the dates missed while paused. Cancelling is final. A
+  schedule past its last possible date shows as **Finished**.
+- Missed dates (for example after downtime) are caught up oldest first, up to 12 per schedule per
+  run; the schedule's page shows how many invoices are due. **Generate now** creates the invoice
+  that is due today or earlier straight away. It never creates one early.
+- Editing a recurring invoice only affects invoices generated afterwards. Invoices already
+  generated are never changed; they are normal invoices and link back to their schedule. The first
+  invoice date and frequency are fixed once an invoice has been generated.
+- The template keeps its own prices: a product's price change does not change it. The customer's
+  current details are copied onto each invoice when it is generated.
+- If an invoice cannot be generated (for example a product on the template has been made inactive),
+  nothing is created, the reason is shown on the schedule, and it is tried again every hour.
+- A schedule that has generated an invoice cannot be deleted, only cancelled. A customer or product
+  used by a recurring invoice cannot be deleted.
 
 ### Expenses
 - Create, view, edit and delete expenses with a date, one of 13 fixed categories,
@@ -180,6 +205,23 @@ cannot be rolled back; the recovery path is restoring a backup taken before migr
 - Limits: 6 send requests a minute per user, 30 invoice emails an hour per business, and 5 a day
   (at most one a minute) per invoice.
 
+### Recurring invoice generation
+- `recurring_invoices` (owned by `business_id`) and `recurring_invoice_items` (owned through it) hold
+  the template. Generation calls `InvoiceService::saveDraft()`, the same code that saves any draft,
+  so validation of ownership, `InvoiceCalculator` totals and the copied customer details are
+  identical. There is no second way of writing invoices.
+- One occurrence is the pair (recurring invoice, date). `invoices.recurring_invoice_id` and
+  `invoices.recurring_occurrence_on` record it, and a unique key on the pair makes one invoice per
+  occurrence a database guarantee. Both are `NULL` on ordinary invoices, which never conflict. A
+  composite foreign key `invoices (business_id, recurring_invoice_id)` means an invoice can only
+  link to a schedule of its own business.
+- Each occurrence is generated in its own transaction: lock the recurring invoice's row, re-check
+  that it is active and due, create the draft, link it, advance `next_occurrence_on`. The row lock
+  serializes the scheduler, overlapping runs and **Generate now**; deadlocks are retried (3
+  attempts); a failure rolls everything back and is recorded on the schedule.
+- The scheduler runs `invoices:generate-recurring` hourly. What is due depends only on dates, so
+  running it more often, twice at once, or after downtime never creates extra invoices.
+
 ### Invoice numbering
 Each business has its own sequence starting at `INV-00001`. Numbers are assigned inside a
 database transaction that locks the business's row, so two invoices issued at the same moment
@@ -257,7 +299,13 @@ These steps assume PHP 8.4 with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `open
     Invoice emails stay "Queued" until a worker picks them up. With the default `MAIL_MAILER=log`
     nothing is delivered: each email, including its base64-encoded PDF (customer data), is written
     to `storage/logs/laravel.log`. Set the `MAIL_*` SMTP settings in `.env` to send real email.
-12. **Run the tests** (see below).
+12. **Run the scheduler** (needed for recurring invoices; leave it running in its own terminal)
+    ```bash
+    php artisan schedule:work
+    ```
+    It runs `invoices:generate-recurring` every hour. To generate what is due straight away, run
+    `php artisan invoices:generate-recurring` yourself; it is safe to run at any time.
+13. **Run the tests** (see below).
 
 If `php` on your PATH is not PHP 8.4, call the PHP 8.4 binary directly. For example, on the
 Windows machine this project was developed on: `C:\php84\php.exe artisan test`. That path is a
@@ -272,6 +320,10 @@ a domain you control with SPF, DKIM and DMARC set up, and a queue worker kept ru
 supervisor (`php artisan queue:work`, restarted with `php artisan queue:restart` on every deploy).
 On Windows the worker cannot enforce its timeout (no `pcntl`), so an interrupted send is only
 detected when the job is retried after `DB_QUEUE_RETRY_AFTER` (90 seconds).
+
+Recurring invoices need the scheduler: run `php artisan schedule:run` every minute from cron (or
+Windows Task Scheduler). If it stops, nothing is lost: missed invoices are generated, oldest first,
+once it runs again.
 
 ## Testing
 
@@ -292,7 +344,9 @@ These are outside the MVP by design, not bugs:
 - Inventory / stock, payroll, HR, point of sale
 - Double-entry accounting, formal financial statements (P&L, balance sheet, cash flow), reconciliation
 - Tax filing, e-invoicing, payment gateways, partial payments
-- CSV / Excel exports, PDF reports, emailed reports, payment reminders, scheduled reports, recurring invoices
+- CSV / Excel exports, PDF reports, emailed reports, payment reminders, scheduled reports
+- Recurring invoices that issue or email themselves, every-N-days or custom schedules, skipping or
+  changing a single occurrence, proration, recurring expenses
 - Multi-currency (amounts are recorded in MYR)
 - REST API, mobile app, WhatsApp API, AI chatbot
 
@@ -305,6 +359,8 @@ Current limitations:
 - Seller details are not copied onto invoices, so editing the business profile also changes the
   seller block of existing invoices and their PDFs.
 - "Paid" means marked as paid in full by the user; there are no payment records.
+- Recurring invoices generate drafts only; each one still has to be issued and emailed by hand.
+  Deleting a generated draft does not bring it back: its date has passed for the schedule.
 - "Sent" means the mail server accepted the email; delivery, bounces and opens are not tracked.
   Like any queue, a send is at-least-once: if the mail server accepts an email and the worker dies
   before recording it, the send is marked failed and a duplicate is possible if it is sent again.

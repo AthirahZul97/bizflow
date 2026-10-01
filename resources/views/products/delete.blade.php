@@ -17,6 +17,12 @@
                             @endif
                         </div>
                         <a href="{{ route('products.show', $product) }}" class="btn btn-outline-secondary">Back to item</a>
+                    @elseif ($usedOnRecurringInvoices)
+                        <div class="alert alert-warning">
+                            <strong>{{ $product->name }}</strong> is used on a recurring invoice and cannot be deleted.
+                            Remove it from the recurring invoice first.
+                        </div>
+                        <a href="{{ route('products.show', $product) }}" class="btn btn-outline-secondary">Back to item</a>
                     @else
                         <p>Are you sure you want to delete <strong>{{ $product->name }}</strong>?</p>
                         <p class="text-body-secondary">This permanently removes the item and cannot be undone.</p>

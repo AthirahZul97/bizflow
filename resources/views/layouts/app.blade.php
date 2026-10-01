@@ -33,6 +33,9 @@
                             <a class="nav-link @if (request()->routeIs('invoices.*')) active @endif" href="{{ route('invoices.index') }}">Invoices</a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link @if (request()->routeIs('recurring-invoices.*')) active @endif" href="{{ route('recurring-invoices.index') }}">Recurring</a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('expenses.*')) active @endif" href="{{ route('expenses.index') }}">Expenses</a>
                         </li>
                         <li class="nav-item">

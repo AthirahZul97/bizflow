@@ -64,6 +64,16 @@ class Customer extends Model
     }
 
     /**
+     * Get the recurring invoices that bill the customer. Their existence blocks deleting the customer.
+     *
+     * @return HasMany<RecurringInvoice, $this>
+     */
+    public function recurringInvoices(): HasMany
+    {
+        return $this->hasMany(RecurringInvoice::class);
+    }
+
+    /**
      * Filter customers whose name, company, email or phone contains the term.
      *
      * The conditions are grouped so the ORs can never escape an outer business_id

@@ -12,6 +12,8 @@ use App\Http\Controllers\InvoiceEmailController;
 use App\Http\Controllers\InvoicePdfController;
 use App\Http\Controllers\InvoiceStatusController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\RecurringInvoiceController;
+use App\Http\Controllers\RecurringInvoiceStatusController;
 use App\Http\Controllers\ReportController;
 use Illuminate\Support\Facades\Route;
 
@@ -53,6 +55,17 @@ Route::middleware('auth')->group(function () {
         Route::post('/invoices/{invoice}/email', [InvoiceEmailController::class, 'store'])
             ->middleware('throttle:6,1')
             ->name('invoices.email.store');
+
+        Route::get('/recurring-invoices/{recurring_invoice}/delete', [RecurringInvoiceController::class, 'delete'])->name('recurring-invoices.delete');
+        Route::resource('recurring-invoices', RecurringInvoiceController::class);
+
+        Route::post('/recurring-invoices/{recurring_invoice}/pause', [RecurringInvoiceStatusController::class, 'pause'])->name('recurring-invoices.pause');
+        Route::post('/recurring-invoices/{recurring_invoice}/resume', [RecurringInvoiceStatusController::class, 'resume'])->name('recurring-invoices.resume');
+        Route::get('/recurring-invoices/{recurring_invoice}/cancel', [RecurringInvoiceStatusController::class, 'confirmCancel'])->name('recurring-invoices.cancel.confirm');
+        Route::post('/recurring-invoices/{recurring_invoice}/cancel', [RecurringInvoiceStatusController::class, 'cancel'])->name('recurring-invoices.cancel');
+        Route::post('/recurring-invoices/{recurring_invoice}/generate', [RecurringInvoiceStatusController::class, 'generate'])
+            ->middleware('throttle:6,1')
+            ->name('recurring-invoices.generate');
 
         Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
         Route::resource('expenses', ExpenseController::class);

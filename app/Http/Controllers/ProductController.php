@@ -116,6 +116,7 @@ class ProductController extends Controller implements HasMiddleware
         return view('products.delete', [
             'product' => $product,
             'usedOnInvoices' => $product->invoiceItems()->exists(),
+            'usedOnRecurringInvoices' => $product->recurringInvoiceItems()->exists(),
         ]);
     }
 
@@ -123,13 +124,19 @@ class ProductController extends Controller implements HasMiddleware
      * Permanently delete a product or service.
      *
      * This is the single place items are deleted. An item used on invoices is kept,
-     * backed by the restrictOnDelete foreign key on invoice_items.product_id.
+     * backed by the restrictOnDelete foreign key on invoice_items.product_id; so is one
+     * used by a recurring invoice (recurring_invoice_items has the same foreign key).
      */
     public function destroy(Product $product): RedirectResponse
     {
         if ($product->invoiceItems()->exists()) {
             return redirect()->route('products.show', $product)
                 ->with('error', 'This item is used on invoices and cannot be deleted. Mark it inactive instead.');
+        }
+
+        if ($product->recurringInvoiceItems()->exists()) {
+            return redirect()->route('products.show', $product)
+                ->with('error', 'This item is used on a recurring invoice and cannot be deleted. Remove it from the recurring invoice first.');
         }
 
         $product->delete();

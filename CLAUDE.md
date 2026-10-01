@@ -8,15 +8,15 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
 - All MVP modules are complete: Authentication, Customers, Products / Services, Invoices,
   Expenses, Dashboard and Reports.
 - Phase 2 so far: invoice PDF download; Phase 2A, the business tenancy foundation with a
-  business profile; Phase 2B, emailing invoices (queued, with send history). Next approved
-  phases: 2C Recurring Invoices, 2D Commercial SaaS.
+  business profile; Phase 2B, emailing invoices (queued, with send history); Phase 2C, recurring
+  invoices (scheduled generation of draft invoices). Next approved phase: 2D Commercial SaaS.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
 ## Data isolation (critical)
 
 - **The business is the tenant boundary.** Every business record (customers, products, invoices,
-  expenses) belongs to a Business through a required `business_id` foreign key. Invoice items
+  expenses, recurring invoices) belongs to a Business through a required `business_id` foreign key. Invoice items
   belong to their invoice. Users belong to businesses through `business_user` memberships.
 - **Ownership:** `business_id` alone determines ownership. `created_by` (invoices, expenses) is
   audit metadata only: `created_by = NULL` means the record was system-generated or has no
@@ -41,13 +41,32 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   `(business_id, invoice_number)` / `(business_id, invoice_sequence)` indexes back it up.
 - **Tests:** every module includes cross-business isolation tests (list, view, update, delete,
   forged IDs and forged `business_id`).
-- **Records owned through a parent** (invoice items, invoice emails) have no `business_id`; reach
+- **Records owned through a parent** (invoice items, invoice emails, recurring invoice items) have no `business_id`; reach
   them only through an already-authorized parent (`$invoice->emails()`). Audit columns such as
   `invoice_emails.requested_by` follow the `created_by` rule: `NULL` means system-generated, never
   ownership.
 - **Migrations that change tenancy or other schema destructively** are rehearsed on a scratch
   database with a fresh backup first; restoring the backup is the recovery of record, not
   `migrate:rollback`.
+
+## Invoices and recurring invoices
+
+- **One way to write invoices:** `InvoiceService`. Anything that creates invoices (recurring
+  generation included) calls `saveDraft()`; never write invoices or their lines another way.
+- **Generated invoices are ordinary invoices** and are never changed by their recurring invoice.
+  Template edits and state changes affect future occurrences only.
+- **One invoice per occurrence** is guaranteed by the unique
+  `(recurring_invoice_id, recurring_occurrence_on)` key on invoices; generation locks the recurring
+  invoice's row first, then re-checks state, creates, links and advances the pointer in one
+  transaction. Recurring dates are always calculated from the start date (`RecurringSchedule`).
+- Recurring invoices generate drafts only; they never issue, number or email by themselves.
+
+## Scheduled work
+
+- Scheduled commands are system tasks: they have no current user or request, never use
+  `CurrentBusiness`, and walk `Business` rows, handing each to a service explicitly.
+- They must be safe to run at any time, more than once, and concurrently: decide what is due from
+  data, take a row lock, and rely on a database constraint as the final guarantee.
 
 ## Queued work
 

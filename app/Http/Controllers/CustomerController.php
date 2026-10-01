@@ -105,6 +105,7 @@ class CustomerController extends Controller implements HasMiddleware
         return view('customers.delete', [
             'customer' => $customer,
             'hasInvoices' => $customer->invoices()->exists(),
+            'hasRecurringInvoices' => $customer->recurringInvoices()->exists(),
         ]);
     }
 
@@ -112,13 +113,19 @@ class CustomerController extends Controller implements HasMiddleware
      * Permanently delete a customer.
      *
      * This is the single place customers are deleted. A customer with invoices is
-     * kept, backed by the restrictOnDelete foreign key on invoices.customer_id.
+     * kept, backed by the restrictOnDelete foreign key on invoices.customer_id; so is
+     * one billed by a recurring invoice (recurring_invoices has the same foreign key).
      */
     public function destroy(Customer $customer): RedirectResponse
     {
         if ($customer->invoices()->exists()) {
             return redirect()->route('customers.show', $customer)
                 ->with('error', 'This customer has invoices and cannot be deleted.');
+        }
+
+        if ($customer->recurringInvoices()->exists()) {
+            return redirect()->route('customers.show', $customer)
+                ->with('error', 'This customer has a recurring invoice and cannot be deleted.');
         }
 
         $customer->delete();

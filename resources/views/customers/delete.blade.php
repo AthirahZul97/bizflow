@@ -15,6 +15,12 @@
                             Invoices keep a record of who they were billed to.
                         </div>
                         <a href="{{ route('customers.show', $customer) }}" class="btn btn-outline-secondary">Back to customer</a>
+                    @elseif ($hasRecurringInvoices)
+                        <div class="alert alert-warning">
+                            <strong>{{ $customer->name }}</strong> has a recurring invoice and cannot be deleted.
+                            Change the recurring invoice to another customer first.
+                        </div>
+                        <a href="{{ route('customers.show', $customer) }}" class="btn btn-outline-secondary">Back to customer</a>
                     @else
                         <p>Are you sure you want to delete <strong>{{ $customer->name }}</strong>?</p>
                         <p class="text-body-secondary">This permanently removes the customer and cannot be undone.</p>

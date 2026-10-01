@@ -97,6 +97,7 @@ class InvoiceController extends Controller implements HasMiddleware
         $invoice->load([
             'items',
             'business',
+            'recurringInvoice:id,name',
             'emails' => fn ($query) => $query->with('requester:id,name')->latest('id'),
         ]);
 

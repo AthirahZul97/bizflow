@@ -63,6 +63,14 @@
         </div>
     @endif
 
+    @if ($invoice->recurringInvoice)
+        <p class="small text-body-secondary mb-2 d-print-none" data-generated-from>
+            Generated from the recurring invoice
+            <a href="{{ route('recurring-invoices.show', $invoice->recurringInvoice) }}">{{ $invoice->recurringInvoice->name }}</a>
+            for {{ $invoice->recurring_occurrence_on->format('d M Y') }}.
+        </p>
+    @endif
+
     {{-- The invoice document --}}
     <div class="card shadow-sm">
         <div class="card-body p-4 p-lg-5">

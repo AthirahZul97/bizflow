@@ -99,6 +99,14 @@ class Business extends Model
     }
 
     /**
+     * @return HasMany<RecurringInvoice, $this>
+     */
+    public function recurringInvoices(): HasMany
+    {
+        return $this->hasMany(RecurringInvoice::class);
+    }
+
+    /**
      * Get the address as a list of its filled-in lines, formatted like a customer address.
      *
      * @return list<string>
