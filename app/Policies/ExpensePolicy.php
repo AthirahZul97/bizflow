@@ -2,14 +2,21 @@
 
 namespace App\Policies;
 
+use App\Billing\EntitlementService;
 use App\Models\Expense;
 use App\Models\User;
+use App\Policies\Concerns\ChecksSubscription;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class ExpensePolicy
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    use ChecksSubscription;
+
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementService $entitlements,
+    ) {}
 
     /**
      * Any authenticated user may list expenses; the query itself is scoped to them.
@@ -20,11 +27,12 @@ class ExpensePolicy
     }
 
     /**
-     * Any authenticated user may record expenses for themselves.
+     * Any authenticated user may record expenses for themselves, while the subscription
+     * allows writes. Expenses have no plan limit.
      */
-    public function create(User $user): bool
+    public function create(User $user): Response
     {
-        return true;
+        return $this->subscriptionAllowsWrites();
     }
 
     public function view(User $user, Expense $expense): Response
@@ -34,12 +42,22 @@ class ExpensePolicy
 
     public function update(User $user, Expense $expense): Response
     {
-        return $this->owns($user, $expense);
+        return $this->ownsForWrite($user, $expense);
     }
 
     public function delete(User $user, Expense $expense): Response
     {
-        return $this->owns($user, $expense);
+        return $this->ownsForWrite($user, $expense);
+    }
+
+    /**
+     * Ownership first (404 for another business), then the subscription must allow writes (403).
+     */
+    private function ownsForWrite(User $user, Expense $expense): Response
+    {
+        $ownership = $this->owns($user, $expense);
+
+        return $ownership->denied() ? $ownership : $this->subscriptionAllowsWrites();
     }
 
     /**

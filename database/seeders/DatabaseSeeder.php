@@ -17,6 +17,9 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
+        // Development-only paid plans with placeholder prices (see PlanSeeder).
+        $this->call(PlanSeeder::class);
+
         User::factory()->create([
             'name' => 'Test User',
             'email' => 'test@example.com',

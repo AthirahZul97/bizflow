@@ -2,7 +2,11 @@
 
 namespace App\Services;
 
+use App\Billing\EntitlementGuard;
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Enums\InvoiceStatus;
+use App\Exceptions\EntitlementException;
 use App\Exceptions\InvoiceStateException;
 use App\Models\Business;
 use App\Models\Customer;
@@ -33,6 +37,7 @@ class InvoiceService
     public function __construct(
         private readonly InvoiceCalculator $calculator,
         private readonly InvoiceNumberGenerator $numbers,
+        private readonly EntitlementService $entitlements,
     ) {}
 
     /**
@@ -115,6 +120,8 @@ class InvoiceService
             if ($items->isEmpty()) {
                 throw new InvoiceStateException('An invoice needs at least one line before it can be issued.');
             }
+
+            $this->ensureWithinMonthlyLimit($invoice);
 
             $totals = $this->calculator->calculate(
                 $items->map(fn ($item) => ['quantity' => $item->quantity, 'unit_price' => $item->unit_price])->all(),
@@ -295,6 +302,24 @@ class InvoiceService
     /**
      * Refuse to change another business's invoice, whatever the caller checked.
      */
+    /**
+     * Refuse to issue past the plan's monthly limit, or without write access.
+     *
+     * Counted after taking the business row lock (the same lock invoice numbering takes next,
+     * after the invoice row, so the lock order is unchanged): two issues racing at the limit
+     * can't both pass, because the second counts the first one's issued_at.
+     */
+    private function ensureWithinMonthlyLimit(Invoice $invoice): void
+    {
+        $business = EntitlementGuard::lock($invoice->business_id);
+
+        $check = $this->entitlements->fresh($business)->check(Entitlement::InvoicesPerMonth);
+
+        if (! $check->allowed) {
+            throw EntitlementException::denied($check);
+        }
+    }
+
     private function ensureBelongsTo(Invoice $invoice, Business $business): void
     {
         if ((int) $invoice->business_id !== (int) $business->getKey()) {

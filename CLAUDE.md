@@ -9,7 +9,8 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   Expenses, Dashboard and Reports.
 - Phase 2 so far: invoice PDF download; Phase 2A, the business tenancy foundation with a
   business profile; Phase 2B, emailing invoices (queued, with send history); Phase 2C, recurring
-  invoices (scheduled generation of draft invoices). Next approved phase: 2D Commercial SaaS.
+  invoices (scheduled generation of draft invoices); Phase 2D, the SaaS commercial foundation
+  (plans, subscriptions, trial, entitlements, read-only enforcement; no payment provider).
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
@@ -61,17 +62,61 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   transaction. Recurring dates are always calculated from the start date (`RecurringSchedule`).
 - Recurring invoices generate drafts only; they never issue, number or email by themselves.
 
+## Subscriptions and entitlements
+
+- **The business is the subscriber.** `subscriptions` belong to a business (history rows; exactly one
+  has `is_current = 1`, ended rows have `NULL`; `UNIQUE (business_id, is_current)`). Only
+  `SubscriptionService` writes subscriptions: it locks the business row, re-reads the current row,
+  validates, and mutates in one transaction. A row is never edited into a different plan: end it
+  as `replaced` and start a new one.
+- **`plans` is the one table without `business_id`:** it is shared platform catalogue data, not
+  business data. A plan row is an immutable version (`UNIQUE (code, version)`): never change the
+  commercial terms of a plan a subscription references (new version instead); retire with
+  `is_active = false`; never delete a referenced plan.
+- **Never write `if ($plan === 'pro')` or compare a subscription's `status` to decide anything.**
+  Ask `EntitlementService::for($business)` (`access()`, `allows()`, `check()`, `limit()`, `used()`,
+  `remaining()`). Access is derived from dates by `AccessResolver`; the stored status may lag.
+  An entitlement a plan does not mention is denied. Add a new one as an `Entitlement` case (+ a
+  `UsageMeter` for a limit), enforce it where it is used, and put a value in a new plan version.
+- **Enforcement has four layers and all four must hold:** services (authoritative; they re-check
+  with `EntitlementService::fresh()` after taking the business row lock, never the memo),
+  `EntitlementGuard::create()` for records without a service (customers, products), policies
+  (ownership first = 404, then subscription = 403), and the fail-closed `subscription.writable`
+  middleware (unsafe methods refused while read-only except the three allow-listed `billing.*`
+  routes, running before route-model binding). New business write routes go inside the `business`
+  route group; do not allow-list them.
+- **Read-only never deletes or mutates business data.** Reads, existing PDFs, reports, billing and
+  logout keep working. Recurring schedules are skipped untouched and catch up later.
+- **Downgrades** apply at period end through `subscriptions.pending_plan_id` (only a Free plan in
+  self-service); access only switches to it once its period has begun.
+- **Self-service never grants a paid plan.** Only `billing:assign` (operator) or, later, a payment
+  provider through `SubscriptionService` starts a paid plan. Do not build checkout or touch a
+  provider without an approved design.
+- **SaaS billing is not customer invoicing.** Never reuse the `invoices` tables, `InvoiceService`
+  or invoice numbering for subscription charges. Provider-specific code lives only in
+  `app/Billing/Providers/<Name>` behind `BillingProvider`.
+- The payment, billing-event and billing-history tables, billing emails and SST/tax on BizFlow's own
+  charges are deferred; the SST decision must be made before the first paying customer. Placeholder
+  prices and limits (the Trial and Free plans, `PlanSeeder`) are not approved commercial terms.
+- Run the commercial tests with `php artisan test tests/Feature/Billing tests/Unit/Billing`; the
+  MySQL concurrency tests in `tests/Mysql` are opt-in (`BIZFLOW_MYSQL_SCRATCH`, a scratch database).
+
 ## Scheduled work
 
 - Scheduled commands are system tasks: they have no current user or request, never use
   `CurrentBusiness`, and walk `Business` rows, handing each to a service explicitly.
 - They must be safe to run at any time, more than once, and concurrently: decide what is due from
   data, take a row lock, and rely on a database constraint as the final guarantee.
+- Subscriptions need **no scheduled job**: access is derived from dates on every check. A scheduled
+  command that does business work (recurring generation) must skip, not fail, a business whose
+  subscription does not allow it, and must leave that business's records untouched.
 
 ## Queued work
 
 - Use Laravel's database queue; no Redis/Horizon. Jobs carry only IDs, re-read and re-check state
   when they run, and implement `ShouldQueueAfterCommit` when dispatched inside a transaction.
+- A job that needs an entitlement (invoice email) re-checks it when it claims its row and, if it
+  has been lost, fails the row for good rather than retrying.
 - Every side effect has a tracking row whose state changes are conditional updates
   (`where status = ...`), so a retried or duplicated job can never repeat the side effect.
 - Retry only failures that may be temporary; when unsure, retry rather than fail.

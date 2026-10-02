@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Billing\EntitlementGuard;
+use App\Enums\Entitlement;
 use App\Enums\ProductType;
 use App\Http\Requests\ProductRequest;
 use App\Models\Product;
@@ -15,7 +17,10 @@ use Illuminate\View\View;
 
 class ProductController extends Controller implements HasMiddleware
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementGuard $guard,
+    ) {}
 
     /**
      * Authorize every action through ProductPolicy.
@@ -75,7 +80,14 @@ class ProductController extends Controller implements HasMiddleware
      */
     public function store(ProductRequest $request): RedirectResponse
     {
-        $product = $this->currentBusiness->get()->products()->create($request->validated());
+        $business = $this->currentBusiness->get();
+
+        // Inactive products count too; counted and inserted under the business row lock.
+        $product = $this->guard->create(
+            $business,
+            Entitlement::Products,
+            fn () => $business->products()->create($request->validated()),
+        );
 
         return redirect()->route('products.show', $product)
             ->with('status', $product->type->label().' created.');

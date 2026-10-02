@@ -9,7 +9,9 @@ and only ever sees and changes that business's data.
 
 > **Status:** MVP complete: Authentication, Customers, Products / Services, Invoices,
 > Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download, the business
-> tenancy foundation with a business profile, emailing invoices, and recurring invoices. See [Known limitations and future scope](#known-limitations-and-future-scope).
+> tenancy foundation with a business profile, emailing invoices, recurring invoices, and the
+> commercial foundation (plans, subscriptions, trial and usage limits; no payment provider yet).
+> See [Known limitations and future scope](#known-limitations-and-future-scope).
 
 ## Tech stack
 
@@ -104,6 +106,34 @@ Other versions may work but have not been verified.
   nothing is created, the reason is shown on the schedule, and it is tried again every hour.
 - A schedule that has generated an invoice cannot be deleted, only cancelled. A customer or product
   used by a recurring invoice cannot be deleted.
+
+### Subscriptions and billing
+- Every business has a subscription history and exactly one **current** subscription, on a plan.
+  The owner sees it at **Billing** (`/billing`): current plan, access state, trial end or renewal
+  date, usage against limits, and the history of every plan the business has been on.
+  **Compare plans** (`/billing/plans`) lists the plans and what each one's button does.
+- **New businesses get one 14-day trial.** When it ends the account is read-only until the owner
+  chooses a plan. A business only ever gets one trial.
+- **Existing businesses were grandfathered** onto the *Legacy* plan by the migration: no expiry, no
+  limits, no payment, no trial. Nothing changed for them. Only an operator can move a business off
+  Legacy.
+- **Free plan:** the owner can switch to it at any time (from a paid period it takes effect when
+  that period ends). **Paid plans cannot be bought yet**: the plan page says "Contact us to
+  upgrade" and an operator assigns them (see [Billing operator command](#billing-operator-command)).
+- The owner can cancel a paid subscription (full access to the end of the period, then read-only)
+  and undo that before it takes effect. Only the owner can manage billing; any member can look.
+
+**When a subscription is not in good standing** the business is never deleted from or changed:
+
+| State | What the business can do |
+|---|---|
+| Full access (active, trial, or no end date) | Everything its plan allows |
+| Grace (7 days after a paid period ends without renewal, or after a failed payment) | Everything its plan allows, with a visible warning |
+| Read-only (trial ended, expired, grace over, or no subscription) | View everything, download existing invoice PDFs, see reports, manage billing, log out. Every other write is refused: creating, editing and deleting records, issuing, marking paid, cancelling, emailing, recurring generation and editing the business profile. |
+
+Recurring schedules are left exactly as they are while a business is read-only (or its plan has
+no recurring invoices); when access returns they catch up as usual (at most 12 occurrences per
+run, drafts only, never issued or emailed automatically).
 
 ### Expenses
 - Create, view, edit and delete expenses with a date, one of 13 fixed categories,
@@ -222,6 +252,62 @@ cannot be rolled back; the recovery path is restoring a backup taken before migr
 - The scheduler runs `invoices:generate-recurring` hourly. What is due depends only on dates, so
   running it more often, twice at once, or after downtime never creates extra invoices.
 
+### Subscriptions, plans and entitlements
+- **The business is the subscriber.** `subscriptions` rows belong to a business (`business_id`,
+  restricted on delete). A plan change ends the old row as `replaced` and starts a new one; a row
+  is never edited into a different plan, so history stays true. `UNIQUE (business_id, is_current)`
+  allows one current row (`is_current = 1`); ended rows have `is_current NULL` (MySQL allows many
+  NULLs in a unique index). `created_by` is audit metadata only, as elsewhere.
+- **`plans` is shared catalogue data**, not business data, so it has no `business_id` (the one
+  deliberate exception to the business-ownership rule). A plan row is an immutable, versioned set
+  of commercial terms: `UNIQUE (code, version)`. Price, currency, interval, trial length and
+  entitlements never change once a subscription references the row (the model refuses, and the
+  foreign keys refuse deletion); change terms by inserting a new version. Retire a plan with
+  `is_active = false`. The migration seeds only three plans: **Legacy**, **Trial** and **Free**.
+  Their Trial and Free limits are placeholders. `php artisan db:seed --class=PlanSeeder` adds two
+  development paid plans whose **prices are placeholders, not approved commercial pricing**.
+- **Entitlements** are a JSON map on the plan keyed by `App\Enums\Entitlement`
+  (`customers.max`, `products.max`, `invoices.monthly_max`, `recurring_invoices.max`,
+  `team.seats`, `invoices.email`): an integer is a limit, `null` is unlimited, `0` is not
+  included, a boolean is a flag, and **an absent key is denied**. A new entitlement is one enum
+  case (plus a usage meter if it is a limit), enforced where it is used, and a value in a new
+  plan version.
+- **Access is derived from dates, never from the stored `status`** (which may lag):
+  `App\Billing\AccessResolver` returns Full, Grace or ReadOnly from the current subscription. Ask
+  `EntitlementService::for($business)` (memoized for one request only, no other cache); never
+  compare a subscription's status or plan name in a controller or view.
+- **Usage is counted live** from the business's own data: customers; products (inactive ones
+  still count; deleting frees capacity); invoices **issued** this calendar month in
+  `Asia/Kuala_Lumpur` by the system `issued_at` timestamp (cancelled ones count because their
+  number was consumed; drafts, including recurring-generated drafts, do not); active and paused
+  recurring schedules; team members. A business over a limit after a downgrade keeps every record
+  and cannot add more until it is back under the limit.
+- **Four enforcement layers.** Services are authoritative (`InvoiceService::issue`,
+  `RecurringInvoiceService::save` and `generateDue`, `InvoiceEmailService::queue` and `claim`).
+  `EntitlementGuard::create` wraps customer and product inserts: it locks the business row, counts,
+  then inserts, so two requests at a limit cannot both succeed. Policies check ownership first
+  (404 for another business) and the subscription second (403 with an upgrade message). The
+  `subscription.writable` middleware refuses every unsafe HTTP method while read-only, except the
+  allow-listed `billing.change`, `billing.cancel` and `billing.resume`; it is deny-by-default
+  and runs before route-model binding so a forged ID and a missing one look the same.
+- **Downgrades take effect at the end of the paid period.** `subscriptions.pending_plan_id` records
+  the plan to move to; the current row stays current until `current_period_ends_at`, and only then
+  does `SubscriptionService` settle it into a new row that starts exactly at that moment. Until
+  then access still comes from the current row's dates, and the pending plan only substitutes once
+  its period has begun. Only a Free plan can be pending in self-service.
+- **Self-service rules:** the owner may switch to Free; they may never choose a paid plan, the
+  Trial plan or Legacy, and never leave Legacy. Starting any paid plan is `billing:assign`.
+- **SaaS billing is separate from customer invoices.** A customer invoice is a business billing its
+  own customer; a subscription charge is BizFlow billing a business, so the roles are reversed.
+  They share no tables, services or numbering, and subscription charges will never use the
+  `invoices` tables.
+- **Payment-provider boundary.** `App\Billing\BillingProvider` (checkout, webhook parsing, cancel,
+  refund) is the only seam a real provider will plug into. Only `ManualBillingProvider` exists,
+  and it never takes or fakes a payment. A future adapter lives in
+  `app/Billing/Providers/<Name>` and calls `SubscriptionService`, which stays the only writer.
+  **Deferred, not built:** the payment, billing-event (webhook) and billing-history tables, checkout
+  and webhook routes, refunds, billing emails, and SST/tax handling for BizFlow's own charges.
+
 ### Invoice numbering
 Each business has its own sequence starting at `INV-00001`. Numbers are assigned inside a
 database transaction that locks the business's row, so two invoices issued at the same moment
@@ -242,7 +328,8 @@ never renumbered, and issuing re-checks that the invoice is still a draft under 
   foreign-key restrictions, index use (`EXPLAIN`) and `ONLY_FULL_GROUP_BY` — was verified
   separately against MySQL 8.0.46, inside transactions that were rolled back.
 - Browser smoke tests on a throwaway SQLite database covered the main flows, mobile width and printing.
-- The automated suite does **not** run against MySQL.
+- The default automated suite does **not** run against MySQL. The commercial layer's
+  concurrency and MySQL-specific tests (`tests/Mysql`) are opt-in against a scratch database.
 
 ## Setup
 
@@ -305,7 +392,25 @@ These steps assume PHP 8.4 with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `open
     ```
     It runs `invoices:generate-recurring` every hour. To generate what is due straight away, run
     `php artisan invoices:generate-recurring` yourself; it is safe to run at any time.
-13. **Run the tests** (see below).
+13. **Billing settings** (optional): `BILLING_PROVIDER=manual` (the only provider) and
+    `BILLING_CONTACT_EMAIL` (the address behind "Contact us to upgrade"). The grace length (7
+    days) and the billing timezone are in `config/billing.php`.
+14. **Run the tests** (see below).
+
+### Billing operator command
+Until a payment provider exists, an operator starts paid plans (and moves a business on or off
+Legacy) from the command line:
+
+```bash
+php artisan billing:assign {business-id} {plan-code}          # newest active version
+php artisan billing:assign {business-id} {plan-code}:{version}
+```
+
+It goes through `SubscriptionService`: the old subscription ends as `replaced`, history is kept,
+and a paid plan starts a billing period now. It refuses a retired plan, the plan the business is
+already on and a second trial. There is no automatic renewal: when a paid period ends with no new
+assignment the business gets the 7-day grace and then becomes read-only. **No new scheduled job is
+needed**: access is judged from the dates every time, so expiry and grace need no job.
 
 If `php` on your PATH is not PHP 8.4, call the PHP 8.4 binary directly. For example, on the
 Windows machine this project was developed on: `C:\php84\php.exe artisan test`. That path is a
@@ -333,6 +438,17 @@ vendor/bin/pint --test    # code style check (no changes made)
 npm run build             # front-end build
 ```
 
+Run only the commercial-layer tests with:
+
+```bash
+php artisan test tests/Feature/Billing tests/Unit/Billing
+```
+
+Concurrency and MySQL-specific behaviour of the commercial layer (the unique `NULL` key, foreign
+keys, two requests racing at a limit, concurrent plan changes) is in `tests/Mysql`. Those tests
+are **skipped** unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its name must contain
+`scratch`, and it is rebuilt with `migrate:fresh`); they never run against the `bizflow` database.
+
 `php artisan test` never touches the MySQL database. Because SQLite and MySQL differ in
 `DECIMAL` handling, foreign-key enforcement, query planning and SQL modes such as
 `ONLY_FULL_GROUP_BY`, database-specific behaviour is verified separately against MySQL.
@@ -343,7 +459,7 @@ These are outside the MVP by design, not bugs:
 
 - Inventory / stock, payroll, HR, point of sale
 - Double-entry accounting, formal financial statements (P&L, balance sheet, cash flow), reconciliation
-- Tax filing, e-invoicing, payment gateways, partial payments
+- Tax filing, e-invoicing, payment gateways (customer payments and BizFlow's own), partial payments
 - CSV / Excel exports, PDF reports, emailed reports, payment reminders, scheduled reports
 - Recurring invoices that issue or email themselves, every-N-days or custom schedules, skipping or
   changing a single occurrence, proration, recurring expenses
@@ -365,6 +481,21 @@ Current limitations:
   Like any queue, a send is at-least-once: if the mail server accepts an email and the worker dies
   before recording it, the send is marked failed and a duplicate is possible if it is sent again.
 - Reports and the dashboard show invoice totals including tax; tax is not reported separately.
+- **No payment provider yet.** Paid plans are assigned by an operator; there is no checkout, no
+  automatic renewal, no refunds, no billing history of payments and no billing emails.
+- **SST / tax on BizFlow's own subscription charges is undecided** and must be resolved (legal
+  entity, whether SST applies, what document the customer receives) **before the first paying
+  customer**. Nothing in the application calculates or prints tax for a subscription.
+- **No private plans:** every active plan is listed to every business, so a negotiated plan would
+  be visible on the comparison page. Hiding one needs a visibility flag on `plans`.
+- Team roles, invitations and seat limits are not built: the `team.seats` entitlement exists
+  and counts members, but every business has one owner.
+- The development paid plans from `PlanSeeder` and the Trial and Free limits are placeholders,
+  not approved commercial pricing or policy.
+- A read-only business cannot edit anything, including marking an invoice paid or editing the
+  business profile (a deliberate, strict policy).
+- Trial abuse by registering several businesses is not detected: one trial is enforced per
+  business only.
 
 ## Development rules
 

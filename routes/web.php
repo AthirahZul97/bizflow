@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BusinessProfileController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
@@ -32,8 +33,9 @@ Route::middleware('guest')->group(function () {
 });
 
 Route::middleware('auth')->group(function () {
-    // Everything that reads or writes business data runs in the current business.
-    Route::middleware('business')->group(function () {
+    // Everything that reads or writes business data runs in the current business, and in a
+    // read-only subscription only reads (plus the allow-listed billing actions) get through.
+    Route::middleware(['business', 'subscription.writable'])->group(function () {
         Route::get('/dashboard', DashboardController::class)->name('dashboard');
 
         Route::get('/customers/{customer}/delete', [CustomerController::class, 'delete'])->name('customers.delete');
@@ -75,6 +77,18 @@ Route::middleware('auth')->group(function () {
             Route::get('/customers', 'customers')->name('customers');
             Route::get('/invoices', 'invoices')->name('invoices');
             Route::get('/expenses', 'expenses')->name('expenses');
+        });
+
+        // Billing: the current business's subscription. No subscription or business ID is ever
+        // in a URL. The writes here are the only ones a read-only business may make (see
+        // EnsureSubscriptionWritable::READ_ONLY_ALLOWED_ROUTES).
+        Route::prefix('billing')->name('billing.')->controller(BillingController::class)->group(function () {
+            Route::get('/', 'show')->name('show');
+            Route::get('/plans', 'plans')->name('plans');
+            Route::post('/plan', 'change')->name('change');
+            Route::get('/cancel', 'confirmCancel')->name('cancel.confirm');
+            Route::post('/cancel', 'cancel')->name('cancel');
+            Route::post('/resume', 'resume')->name('resume');
         });
 
         Route::get('/business/profile', [BusinessProfileController::class, 'edit'])->name('business.profile.edit');

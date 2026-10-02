@@ -2,7 +2,13 @@
 
 namespace App\Services;
 
+use App\Billing\EntitlementCheck;
+use App\Billing\EntitlementGuard;
+use App\Billing\EntitlementService;
+use App\Enums\DenyReason;
+use App\Enums\Entitlement;
 use App\Enums\RecurringInvoiceStatus;
+use App\Exceptions\EntitlementException;
 use App\Exceptions\InvoiceCalculationException;
 use App\Exceptions\RecurringInvoiceException;
 use App\Models\Business;
@@ -52,6 +58,7 @@ class RecurringInvoiceService
     public function __construct(
         private readonly InvoiceService $invoices,
         private readonly InvoiceCalculator $calculator,
+        private readonly EntitlementService $entitlements,
     ) {}
 
     /**
@@ -67,6 +74,22 @@ class RecurringInvoiceService
     public function save(Business $business, ?User $creator, array $data, ?RecurringInvoice $recurring = null): RecurringInvoice
     {
         return DB::transaction(function () use ($business, $creator, $data, $recurring) {
+            // Entitlement is checked under the business row lock, so two requests at the limit
+            // can't both create a schedule. Editing only needs write access: a business above its
+            // limit after a downgrade keeps and may edit what it has.
+            EntitlementGuard::lock($business);
+            $entitled = $this->entitlements->fresh($business);
+
+            if ($recurring === null) {
+                $check = $entitled->check(Entitlement::RecurringInvoices);
+
+                if (! $check->allowed) {
+                    throw EntitlementException::denied($check);
+                }
+            } elseif (! $entitled->canWrite()) {
+                throw EntitlementException::readOnly();
+            }
+
             if ($recurring === null) {
                 $recurring = $business->recurringInvoices()->make();
                 $recurring->forceFill([
@@ -239,6 +262,12 @@ class RecurringInvoiceService
      */
     public function generateDue(Business $business, RecurringInvoice $recurring, ?User $creator = null, int $max = self::MAX_OCCURRENCES_PER_RUN): array
     {
+        // Without write access, or on a plan without recurring invoices, nothing is generated
+        // and the schedule is left exactly as it is: it catches up when access returns.
+        if ($this->generationBlock($business) !== null) {
+            return ['invoices' => [], 'error' => null];
+        }
+
         $invoices = [];
 
         for ($i = 0; $i < $max; $i++) {
@@ -259,11 +288,33 @@ class RecurringInvoiceService
     }
 
     /**
+     * Why this business can't generate recurring invoices right now, or null when it can: it
+     * needs write access AND a plan that includes recurring invoices (usage doesn't matter, so
+     * a business above its limit still generates what it already has).
+     */
+    public function generationBlock(Business $business): ?EntitlementCheck
+    {
+        $entitled = $this->entitlements->fresh($business);
+
+        if (! $entitled->canWrite()) {
+            return EntitlementCheck::denied(Entitlement::RecurringInvoices, DenyReason::ReadOnly);
+        }
+
+        $check = $entitled->check(Entitlement::RecurringInvoices, 0);
+
+        return $check->allowed ? null : $check;
+    }
+
+    /**
      * "Generate now": generate the next occurrence, which must be due today or
      * earlier. Uses exactly the same path as the scheduler.
      */
     public function generateNow(Business $business, RecurringInvoice $recurring, User $user): Invoice
     {
+        if (($block = $this->generationBlock($business)) !== null) {
+            throw EntitlementException::denied($block);
+        }
+
         try {
             $invoice = $this->generateNext($business, $recurring->getKey(), $user);
         } catch (Throwable $e) {
