@@ -453,6 +453,32 @@ are **skipped** unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its nam
 `DECIMAL` handling, foreign-key enforcement, query planning and SQL modes such as
 `ONLY_FULL_GROUP_BY`, database-specific behaviour is verified separately against MySQL.
 
+### Phase 2D verification status
+
+**Application-level verification: completed.** 1,317 tests (5,140 assertions) pass on in-memory
+SQLite, Pint and `npm run build` pass, and a browser smoke test (desktop and 375px) passed against
+a throwaway SQLite database. None of this touched the BizFlow MySQL database. A fresh backup
+(`bizflow-pre-2d-20261002-083956.sql`) was taken before any MySQL work.
+
+**MySQL scratch verification (Stage 18): BLOCKED, not executed.** MySQL scratch database
+unavailable due to current MySQL account privileges.
+- The rehearsal needs a database named `bizflow_phase2d_scratch`. It was **not created**.
+- The application account, `bizflow_user@localhost`, has privileges only on `bizflow.*` and
+  `bizflow_rehearsal.*` and cannot create a new database. Laravel's normal BizFlow MySQL
+  connection itself was verified to work.
+- `bizflow` was **not modified**, and `bizflow_rehearsal` was **not used** (the test guard
+  rejects any name without `scratch`, and that guard was left unchanged).
+- The 22 tests in `tests/Mysql` are written but have **never run**, so none of the following is
+  verified on MySQL: the unique `NULL` key semantics, foreign-key restrictions, the backfill's
+  `INSERT IGNORE`, rollback and re-migration, concurrent customer/product/invoice limits,
+  concurrent plan changes, lock ordering and deadlocks, and one-trial-ever under concurrency.
+- **To resume:** an authorized MySQL administrator creates `bizflow_phase2d_scratch`
+  (utf8mb4) and grants `bizflow_user` privileges on that database only. Then run
+  `BIZFLOW_MYSQL_SCRATCH=bizflow_phase2d_scratch php artisan test tests/Mysql`.
+
+Do not migrate the real dev database for Phase 2D until Stage 18 has passed. The next phase is
+not yet specified and must be decided separately.
+
 ## Known limitations and future scope
 
 These are outside the MVP by design, not bugs:

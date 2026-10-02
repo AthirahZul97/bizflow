@@ -11,6 +11,13 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   business profile; Phase 2B, emailing invoices (queued, with send history); Phase 2C, recurring
   invoices (scheduled generation of draft invoices); Phase 2D, the SaaS commercial foundation
   (plans, subscriptions, trial, entitlements, read-only enforcement; no payment provider).
+- **Phase 2D verification:** application-level checks are complete (full SQLite suite, Pint, build,
+  SQLite browser smoke). **MySQL Stage 18 is BLOCKED and has not run**: `bizflow_phase2d_scratch`
+  was not created because `bizflow_user@localhost` cannot create databases. The real `bizflow`
+  database was not modified and `bizflow_rehearsal` was not used. Never record Stage 18 as passed
+  until an administrator provides the scratch database and `tests/Mysql` actually passes; do not
+  weaken the `scratch` guard to get around it (details in README "Phase 2D verification status").
+- The next phase is not yet specified and must be decided separately.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
