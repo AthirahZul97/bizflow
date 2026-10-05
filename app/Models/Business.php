@@ -100,6 +100,14 @@ class Business extends Model
     }
 
     /**
+     * @return HasMany<ExpenseReceipt, $this>
+     */
+    public function expenseReceipts(): HasMany
+    {
+        return $this->hasMany(ExpenseReceipt::class);
+    }
+
+    /**
      * @return HasMany<RecurringInvoice, $this>
      */
     public function recurringInvoices(): HasMany

@@ -25,6 +25,8 @@ class PlanSeeder extends Seeder
             'recurring_invoices.max' => 50,
             'team.seats' => 1,
             'invoices.email' => true,
+            // PLACEHOLDER development value, not an approved commercial limit.
+            'expenses.ocr_monthly_max' => 100,
         ];
 
         $plans = [

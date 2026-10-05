@@ -64,6 +64,7 @@ trait ManagesSubscriptions
             'recurring_invoices.max' => null,
             'team.seats' => null,
             'invoices.email' => true,
+            'expenses.ocr_monthly_max' => null,
         ]);
         $this->subscribe($owner, fn (SubscriptionFactory $f) => $f->state(['plan_id' => $plan->getKey()]));
 

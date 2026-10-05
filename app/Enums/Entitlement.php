@@ -4,6 +4,7 @@ namespace App\Enums;
 
 use App\Billing\Meters\CustomerCountMeter;
 use App\Billing\Meters\MonthlyIssuedInvoicesMeter;
+use App\Billing\Meters\MonthlyReceiptOcrMeter;
 use App\Billing\Meters\ProductCountMeter;
 use App\Billing\Meters\RecurringScheduleMeter;
 use App\Billing\Meters\TeamSeatMeter;
@@ -23,6 +24,7 @@ enum Entitlement: string
     case RecurringInvoices = 'recurring_invoices.max';
     case TeamSeats = 'team.seats';
     case InvoiceEmail = 'invoices.email';
+    case ReceiptOcr = 'expenses.ocr_monthly_max';
 
     /**
      * Get the human-readable label for the entitlement.
@@ -36,6 +38,7 @@ enum Entitlement: string
             self::RecurringInvoices => 'Recurring invoices',
             self::TeamSeats => 'Team members',
             self::InvoiceEmail => 'Email invoices',
+            self::ReceiptOcr => 'Receipt scans per month',
         };
     }
 
@@ -51,6 +54,7 @@ enum Entitlement: string
             self::RecurringInvoices => 'recurring invoices',
             self::TeamSeats => 'team members',
             self::InvoiceEmail => 'invoice emails',
+            self::ReceiptOcr => 'receipt scans a month',
         };
     }
 
@@ -83,6 +87,7 @@ enum Entitlement: string
             self::InvoicesPerMonth => new MonthlyIssuedInvoicesMeter,
             self::RecurringInvoices => new RecurringScheduleMeter,
             self::TeamSeats => new TeamSeatMeter,
+            self::ReceiptOcr => new MonthlyReceiptOcrMeter,
             self::InvoiceEmail => null,
         };
     }

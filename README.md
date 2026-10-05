@@ -10,7 +10,8 @@ and only ever sees and changes that business's data.
 > **Status:** MVP complete: Authentication, Customers, Products / Services, Invoices,
 > Expenses, Dashboard and Reports. Phase 2 so far: invoice PDF download, the business
 > tenancy foundation with a business profile, emailing invoices, recurring invoices, and the
-> commercial foundation (plans, subscriptions, trial and usage limits; no payment provider yet).
+> commercial foundation (plans, subscriptions, trial and usage limits; no payment provider yet),
+> and receipt scanning for expenses (Phase 2E: **demo OCR only, no real OCR provider yet**).
 > See [Known limitations and future scope](#known-limitations-and-future-scope).
 
 ## Tech stack
@@ -140,6 +141,23 @@ run, drafts only, never issued or emailed automatically).
   description, amount, optional payee and notes.
 - Search by description or payee; filter by category and date range.
 - The list shows the exact count and total of everything matching the filters.
+
+### Receipt scanning (Phase 2E)
+- Upload a JPG, PNG or PDF receipt, review what was read, edit any field and **explicitly confirm**
+  to create the expense. OCR never creates an expense by itself; nothing is saved as an expense
+  until the user confirms.
+- **Demo OCR only.** The only provider is `FakeReceiptOcrProvider`: it reads nothing from the file
+  and returns the same made-up merchant, date and amounts for every receipt. Every receipt page
+  says so. **No real OCR provider has been selected or integrated, and no receipt leaves the
+  application.** Real OCR is a separate, later decision (provider, cost, privacy).
+- States: `queued` -> `processing` -> `review` -> `confirmed`, with `unreadable` (nothing usable
+  found) and `failed` (technical failure), both of which can be retried or filled in by hand, and
+  `discarded`. Duplicate files and look-alike expenses produce warnings, never blocks.
+- The monthly number of scans is a plan limit (`expenses.ocr_monthly_max`). **The values are
+  development placeholders, not final commercial terms:** Legacy unlimited, Trial 20 a month,
+  Free 0, development paid plans 100.
+- Receipts nobody confirms are discarded, and their files deleted, after 30 days
+  (`php artisan receipts:prune`, scheduled daily). Confirmed receipts keep their file.
 
 ### Dashboard
 For a selected period (this month by default, last month, this year or a custom range):
@@ -308,6 +326,28 @@ cannot be rolled back; the recovery path is restoring a backup taken before migr
   **Deferred, not built:** the payment, billing-event (webhook) and billing-history tables, checkout
   and webhook routes, refunds, billing emails, and SST/tax handling for BizFlow's own charges.
 
+### Receipt scanning
+- **One table, `expense_receipts`**, owned by a business through a required `business_id`. It holds
+  the private file path, the OCR state, the normalized extraction (JSON), the names of fields the
+  user edited, audit timestamps and the created expense (`expense_id`, `UNIQUE`, so a receipt can
+  never create two expenses). Raw provider responses and OCR text are never stored, and there is
+  no attempt history: a retry replaces the extraction.
+- **Provider seam:** `App\Ocr\ReceiptOcrProvider`. `ReceiptExtractionNormalizer` validates and
+  cleans whatever a provider returns (amounts, dates, text, category) and produces warnings and
+  confidence; a provider without confidence scores shows as "unverified".
+- **Files** live on the private `receipts` disk (`storage/app/receipts`), outside every served
+  disk root, under a generated `{business}/{ulid}.{ext}` name; the client filename is only a
+  cleaned display label. Uploads are accepted by their bytes (finfo type, magic bytes, matching
+  extension, a decodable image within a pixel limit, a complete unencrypted PDF with no active
+  content), never by what the client claims. The only way to read a file is the authenticated,
+  policy-checked route, with `nosniff`, a sandboxing CSP and no caching. Images are not
+  re-encoded and EXIF data is not stripped yet.
+- **Quota:** a receipt takes one unit of the monthly allowance when uploaded, under the business
+  row lock; a technical failure or a discard before it was read gives the unit back, and retrying
+  a read receipt or confirming uses no more.
+- **Confirming** locks the receipt row, requires `review`, re-checks write access, validates with
+  the Expense rules, and creates the expense and links it in one transaction.
+
 ### Invoice numbering
 Each business has its own sequence starting at `INV-00001`. Numbers are assigned inside a
 database transaction that locks the business's row, so two invoices issued at the same moment
@@ -426,6 +466,11 @@ supervisor (`php artisan queue:work`, restarted with `php artisan queue:restart`
 On Windows the worker cannot enforce its timeout (no `pcntl`), so an interrupted send is only
 detected when the job is retried after `DB_QUEUE_RETRY_AFTER` (90 seconds).
 
+Receipt scanning reuses the queue worker. PHP's `upload_max_filesize` and `post_max_size` must be
+at least `ocr.max_upload_kb` (8 MB by default); PHP's own default of 2 MB rejects larger phone
+photos before BizFlow sees them. `OCR_DRIVER` is `fake` (demo data) or `none` (scanning off). The
+`receipts:prune` command runs from the same scheduler.
+
 Recurring invoices need the scheduler: run `php artisan schedule:run` every minute from cron (or
 Windows Task Scheduler). If it stops, nothing is lost: missed invoices are generated, oldest first,
 once it runs again.
@@ -452,6 +497,17 @@ are **skipped** unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its nam
 `php artisan test` never touches the MySQL database. Because SQLite and MySQL differ in
 `DECIMAL` handling, foreign-key enforcement, query planning and SQL modes such as
 `ONLY_FULL_GROUP_BY`, database-specific behaviour is verified separately against MySQL.
+
+### Phase 2E verification status
+
+Application-level verification: the full suite (1,575 tests, 6,148 assertions) passes on in-memory
+SQLite, Pint passes, and the receipt tests (`tests/Feature/ExpenseReceipts`,
+`tests/Unit/Ocr`) run on in-memory SQLite with a faked disk and queue, and a browser smoke test
+at 375px passed against a throwaway SQLite database (upload, review, confirm, double submit,
+private file headers). **MySQL scratch verification is still BLOCKED and has not run** (see
+below): the new migrations, the unique `expense_id`, the foreign keys and the row locks that
+stop two requests passing the monthly limit or confirming twice have not been exercised on
+MySQL. The real `bizflow` database has **not** been migrated for Phase 2E.
 
 ### Phase 2D verification status
 
@@ -491,6 +547,8 @@ These are outside the MVP by design, not bugs:
   changing a single occurrence, proration, recurring expenses
 - Multi-currency (amounts are recorded in MYR)
 - REST API, mobile app, WhatsApp API, AI chatbot
+- A real OCR provider, line-item extraction, supplier matching, batch or e-mailed receipts,
+  tax / currency / receipt-number columns on expenses, OCR attempt history
 
 Current limitations:
 
@@ -520,6 +578,12 @@ Current limitations:
   not approved commercial pricing or policy.
 - A read-only business cannot edit anything, including marking an invoice paid or editing the
   business profile (a deliberate, strict policy).
+- **Receipt scanning is demo-only.** `FakeReceiptOcrProvider` returns fixed data; do not rely on it
+  for real bookkeeping. Its limits (Trial 20, Free 0, Legacy unlimited, paid 100) are
+  placeholders. Subtotal, tax, receipt number, currency and payment method have no expense
+  column: they are prefilled into the editable notes. Receipt files are kept with their expense,
+  and a deleted expense leaves its receipt (discard it separately). A business that is read-only
+  keeps its unconfirmed receipts until it can write again.
 - Trial abuse by registering several businesses is not detected: one trial is enforced per
   business only.
 

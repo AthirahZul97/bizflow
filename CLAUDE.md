@@ -17,7 +17,13 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   database was not modified and `bizflow_rehearsal` was not used. Never record Stage 18 as passed
   until an administrator provides the scratch database and `tests/Mysql` actually passes; do not
   weaken the `scratch` guard to get around it (details in README "Phase 2D verification status").
-- The next phase is not yet specified and must be decided separately.
+- **Phase 2E (receipt OCR capture) is implemented on `feature/expense-ocr` with the demo provider
+  only.** `FakeReceiptOcrProvider` returns fixed data; **no real OCR provider has been selected or
+  integrated** and no external OCR API may be called without an approved design. Its OCR limits
+  (Trial 20, Free 0, Legacy unlimited, paid 100) are development placeholders. The Phase 2E
+  migrations have **not** been run against the real `bizflow` database, and MySQL scratch
+  verification is still blocked (same blocker as Phase 2D).
+- The next phase after that is not yet specified and must be decided separately.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
@@ -107,6 +113,23 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   prices and limits (the Trial and Free plans, `PlanSeeder`) are not approved commercial terms.
 - Run the commercial tests with `php artisan test tests/Feature/Billing tests/Unit/Billing`; the
   MySQL concurrency tests in `tests/Mysql` are opt-in (`BIZFLOW_MYSQL_SCRATCH`, a scratch database).
+
+## Receipt OCR (Phase 2E)
+
+- **OCR never creates an expense.** Only `ExpenseReceiptService::confirm()` does, for a receipt in
+  `review`, with the values the user submitted, in one transaction under the receipt's row lock.
+  `expense_receipts.expense_id` is unique. Keep `ExpenseController` independent of it.
+- `expense_receipts` is business data (`business_id` required, never fillable); `uploaded_by` and
+  `confirmed_by` are audit metadata only. Only `ExpenseReceiptService` writes it; query it from
+  `$business->expenseReceipts()`.
+- Providers sit behind `App\Ocr\ReceiptOcrProvider`; whatever they return goes through
+  `ReceiptExtractionNormalizer`. Never store raw provider responses or OCR text, never log
+  receipt contents, and never put the client filename in a path.
+- Files are on the private `receipts` disk and are only served by the policy-checked file route.
+- The monthly OCR allowance is the `Entitlement::ReceiptOcr` limit, counted by
+  `MonthlyReceiptOcrMeter` from `expense_receipts.counted_at`. A unit is taken at upload (and when
+  retrying a failed receipt) under the business row lock, and released by a technical failure or a
+  discard before extraction. Confirming uses none.
 
 ## Scheduled work
 

@@ -7,6 +7,9 @@ use App\Billing\EntitlementService;
 use App\Billing\ManualBillingProvider;
 use App\Billing\SubscriptionNotice;
 use App\Enums\BusinessRole;
+use App\Ocr\Providers\DisabledReceiptOcrProvider;
+use App\Ocr\Providers\FakeReceiptOcrProvider;
+use App\Ocr\ReceiptOcrProvider;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Pagination\Paginator;
@@ -32,6 +35,14 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(BillingProvider::class, fn () => match (config('billing.provider')) {
             'manual' => new ManualBillingProvider,
             default => throw new \InvalidArgumentException('Unknown billing provider ['.config('billing.provider').'].'),
+        });
+
+        // The OCR provider is the one seam to any OCR service. Only the demo provider exists: no
+        // real provider has been selected or integrated, and no receipt leaves the application.
+        $this->app->bind(ReceiptOcrProvider::class, fn () => match (config('ocr.driver')) {
+            'fake' => new FakeReceiptOcrProvider,
+            'none' => new DisabledReceiptOcrProvider,
+            default => throw new \InvalidArgumentException('Unknown OCR driver ['.config('ocr.driver').'].'),
         });
     }
 

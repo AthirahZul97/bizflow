@@ -6,6 +6,7 @@ use App\Enums\BusinessRole;
 use App\Models\Business;
 use App\Models\Customer;
 use App\Models\Expense;
+use App\Models\ExpenseReceipt;
 use App\Models\Invoice;
 use App\Models\Product;
 use App\Models\User;
@@ -24,7 +25,7 @@ abstract class TestCase extends BaseTestCase
     /**
      * The owner of the business a record (or the business itself) belongs to.
      */
-    protected function ownerOf(Business|Customer|Product|Invoice|Expense $record): User
+    protected function ownerOf(Business|Customer|Product|Invoice|Expense|ExpenseReceipt $record): User
     {
         $business = $record instanceof Business ? $record : $record->business;
 

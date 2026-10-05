@@ -17,6 +17,8 @@ class EntitlementCatalogTest extends TestCase
             'recurring_invoices.max',
             'team.seats',
             'invoices.email',
+            // Phase 2E: the monthly receipt OCR allowance.
+            'expenses.ocr_monthly_max',
         ], array_map(fn (Entitlement $e) => $e->value, Entitlement::cases()));
     }
 

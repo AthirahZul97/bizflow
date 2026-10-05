@@ -79,6 +79,7 @@ class PlanFactory extends Factory
             'recurring_invoices.max' => null,
             'team.seats' => null,
             'invoices.email' => true,
+            'expenses.ocr_monthly_max' => null,
         ]);
     }
 

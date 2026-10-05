@@ -13,3 +13,7 @@ Artisan::command('inspire', function () {
 // are safe (row lock + unique occurrence key); withoutOverlapping just avoids
 // wasted work.
 Schedule::command('invoices:generate-recurring')->hourlyAt(5)->withoutOverlapping();
+
+// Discards receipts nobody confirmed within the retention period and deletes their files.
+// Idempotent (conditional updates under row locks), so repeats and overlaps are harmless.
+Schedule::command('receipts:prune')->dailyAt('03:15')->withoutOverlapping();

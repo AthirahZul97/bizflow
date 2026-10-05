@@ -7,6 +7,8 @@ use App\Http\Controllers\BusinessProfileController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
+use App\Http\Controllers\ExpenseReceiptController;
+use App\Http\Controllers\ExpenseReceiptFileController;
 use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\InvoiceEmailController;
@@ -71,6 +73,23 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/expenses/{expense}/delete', [ExpenseController::class, 'delete'])->name('expenses.delete');
         Route::resource('expenses', ExpenseController::class);
+
+        // Receipt scanning: upload, status, review and confirm. Receipts are private files; the
+        // only way to read one is the policy-checked file route. Confirming is the only thing
+        // that creates an expense.
+        Route::get('/expense-receipts/{expense_receipt}/delete', [ExpenseReceiptController::class, 'delete'])->name('expense-receipts.delete');
+        Route::get('/expense-receipts/{expense_receipt}/file', ExpenseReceiptFileController::class)->name('expense-receipts.file');
+        Route::post('/expense-receipts', [ExpenseReceiptController::class, 'store'])
+            ->middleware('throttle:20,1')
+            ->name('expense-receipts.store');
+        Route::post('/expense-receipts/{expense_receipt}/confirm', [ExpenseReceiptController::class, 'confirm'])
+            ->middleware('throttle:12,1')
+            ->name('expense-receipts.confirm');
+        Route::post('/expense-receipts/{expense_receipt}/retry', [ExpenseReceiptController::class, 'retry'])
+            ->middleware('throttle:10,1')
+            ->name('expense-receipts.retry');
+        Route::post('/expense-receipts/{expense_receipt}/manual', [ExpenseReceiptController::class, 'manual'])->name('expense-receipts.manual');
+        Route::resource('expense-receipts', ExpenseReceiptController::class)->only(['index', 'create', 'show', 'destroy']);
 
         Route::prefix('reports')->name('reports.')->controller(ReportController::class)->group(function () {
             Route::get('/', 'summary')->name('summary');
