@@ -188,23 +188,36 @@ class SubscriptionMysqlTest extends MysqlTestCase
         $this->assertSame(1, Subscription::query()->where('business_id', $ids[0])->count());
     }
 
-    public function test_the_three_migrations_roll_back_and_apply_again_and_the_backfill_reruns(): void
+    public function test_the_commercial_migrations_roll_back_and_apply_again_and_the_backfill_reruns(): void
     {
         $owner = $this->owner();
         $business = $this->businessOf($owner);
 
-        Artisan::call('migrate:rollback', ['--step' => 3, '--force' => true, '--database' => 'mysql']);
+        // The five newest migrations: plans, subscriptions, the seed/backfill (Phase 2D), then the
+        // receipts table and the OCR entitlement (Phase 2E, which sit on top of them).
+        Artisan::call('migrate:rollback', ['--step' => 5, '--force' => true, '--database' => 'mysql']);
+        $this->assertFalse(Schema::hasTable('expense_receipts'));
         $this->assertFalse(Schema::hasTable('subscriptions'));
         $this->assertFalse(Schema::hasTable('plans'));
         $this->assertTrue(Schema::hasTable('businesses'), 'business data is not touched by the rollback');
         $this->assertTrue(Business::query()->whereKey($business->getKey())->exists());
 
-        Artisan::call('migrate', ['--force' => true, '--database' => 'mysql']);
+        try {
+            Artisan::call('migrate', ['--force' => true, '--database' => 'mysql']);
 
-        $this->assertSame(3, Plan::count());
-        $subscription = $business->subscriptions()->with('plan')->sole();
-        $this->assertTrue($subscription->plan->isLegacy());
-        $this->assertTrue($subscription->isCurrent());
+            // The backfill gave the business a Legacy v1 subscription before the OCR migration ran,
+            // so Legacy v1 is referenced: it is left untouched and retired, and Legacy v2 carries the
+            // OCR entitlement (immutable plan versions). Trial and Free were unreferenced: edited in place.
+            $this->assertSame(4, Plan::count());
+            $this->assertSame(2, Plan::query()->where('code', 'legacy')->count());
+            $subscription = $business->subscriptions()->with('plan')->sole();
+            $this->assertTrue($subscription->plan->isLegacy());
+            $this->assertSame(1, $subscription->plan->version, 'the existing subscription still points at the version it started on');
+            $this->assertTrue($subscription->isCurrent());
+            $this->assertTrue(Schema::hasTable('expense_receipts'));
+        } finally {
+            $this->rebuildScratchSchema();
+        }
     }
 
     // ---- concurrency ----------------------------------------------------------------------

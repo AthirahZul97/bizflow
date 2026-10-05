@@ -58,6 +58,18 @@ abstract class MysqlTestCase extends TestCase
     }
 
     /**
+     * Drop everything and apply every migration again. For a test that changed the schema or the
+     * seeded plans (a rollback, a plan migration) and must leave the scratch database as it found it.
+     * Scratch only: setUp() has already asserted the database name.
+     */
+    protected function rebuildScratchSchema(): void
+    {
+        $this->assertStringContainsString('scratch', (string) DB::selectOne('select database() as name')->name);
+
+        Artisan::call('migrate:fresh', ['--force' => true, '--database' => 'mysql']);
+    }
+
+    /**
      * Empty every table except the migration log and the three seeded plans.
      */
     protected function resetData(): void
@@ -118,7 +130,7 @@ abstract class MysqlTestCase extends TestCase
         ]);
 
         $process = proc_open(
-            [PHP_BINARY, '-c', (string) php_ini_loaded_file(), base_path('tests/Mysql/worker.php'), json_encode($args)],
+            self::workerCommand($args, php_ini_loaded_file()),
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             base_path(),
@@ -128,6 +140,24 @@ abstract class MysqlTestCase extends TestCase
         $this->assertIsResource($process, 'could not start a worker');
 
         return ['process' => $process, 'pipes' => $pipes];
+    }
+
+    /**
+     * The command line that starts a worker: this PHP binary, with the same php.ini only when one
+     * was loaded (CI images often load none, and php_ini_loaded_file() is then false).
+     *
+     * @param  array<string, mixed>  $args
+     * @return list<string>
+     */
+    public static function workerCommand(array $args, string|false|null $ini): array
+    {
+        $command = [PHP_BINARY];
+
+        if (is_string($ini) && $ini !== '') {
+            array_push($command, '-c', $ini);
+        }
+
+        return [...$command, base_path('tests/Mysql/worker.php'), json_encode($args)];
     }
 
     /**
@@ -161,9 +191,23 @@ abstract class MysqlTestCase extends TestCase
      */
     protected function raceBehindBusinessLock(int $businessId, array $workers, ?callable $beforeRelease = null, int $holdMilliseconds = 2500): array
     {
+        return $this->raceBehindRowLock('businesses', $businessId, $workers, $beforeRelease, $holdMilliseconds);
+    }
+
+    /**
+     * The same race, held behind any one row's lock (for work that serializes on a row other
+     * than the business, such as a receipt being confirmed). $table is always a constant
+     * written in a test, never input.
+     *
+     * @param  list<array<string, mixed>>  $workers  Worker argument arrays.
+     * @param  (callable(PDO): void)|null  $beforeRelease
+     * @return list<array<string, mixed>> The outcomes, in the order given.
+     */
+    protected function raceBehindRowLock(string $table, int $id, array $workers, ?callable $beforeRelease = null, int $holdMilliseconds = 2500): array
+    {
         $pdo = $this->lockSession();
         $pdo->beginTransaction();
-        $pdo->query("select id from businesses where id = {$businessId} for update")->fetchAll();
+        $pdo->query("select id from {$table} where id = {$id} for update")->fetchAll();
 
         $started = array_map(fn (array $args) => $this->startWorker($args), $workers);
 

@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP (Pint + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, dom, xml, xmlwriter, fileinfo, openssl, tokenizer, ctype, pdo_sqlite, sqlite3, pdo_mysql, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # The tests run on in-memory SQLite (phpunit.xml); they only need an application key.
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      # tests/Mysql is not part of this run: phpunit.xml lists only tests/Unit and tests/Feature.
+      - name: Tests
+        run: php artisan test
+
+      - name: Composer audit
+        run: composer audit --locked
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm audit --omit=dev
+
+  mysql:
+    name: MySQL (tests/Mysql)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # CI-only throwaway credentials for a service container that exists for this job alone.
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          # The scratch database the tests rebuild with migrate:fresh. Its name must contain "scratch".
+          MYSQL_DATABASE: bizflow_ci_scratch
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USERNAME: root
+      DB_PASSWORD: ci_root_pw
+      # The "application" database name. It is never connected to: the MySQL tests refuse to run
+      # unless the scratch name differs from it.
+      DB_DATABASE: bizflow_ci
+      BIZFLOW_MYSQL_SCRATCH: bizflow_ci_scratch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, dom, xml, xmlwriter, fileinfo, openssl, tokenizer, ctype, pdo_sqlite, sqlite3, pdo_mysql, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # The tests build their own schema (migrate:fresh on the scratch database), so there is no
+      # separate migrate step.
+      - name: MySQL tests
+        run: php artisan test tests/Mysql

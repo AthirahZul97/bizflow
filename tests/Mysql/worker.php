@@ -20,10 +20,14 @@ use App\Models\Business;
 use App\Models\Invoice;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\User;
+use App\Services\ExpenseReceiptService;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 require __DIR__.'/../../vendor/autoload.php';
 
@@ -81,6 +85,39 @@ try {
             app(SubscriptionService::class)->renew($business, Subscription::query()->findOrFail($args['subscription_id']));
 
             return 'renewed';
+        })(),
+        'upload_receipt' => (function () use ($business, $args) {
+            // Receipt files go to a temporary directory the test names (never the real storage
+            // directory), and the OCR job is discarded: only the upload and its quota accounting run.
+            config(['queue.default' => 'null', 'filesystems.disks.receipts.root' => $args['disk_root']]);
+            Storage::forgetDisk('receipts');
+
+            // A distinct, valid 1x1 PNG each time: the bytes are fixed, never passed as an argument.
+            $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==').random_bytes(8);
+            $temporary = tempnam(sys_get_temp_dir(), 'bizflow-upload-');
+            file_put_contents($temporary, $png);
+
+            try {
+                app(ExpenseReceiptService::class)->upload(
+                    $business,
+                    User::query()->findOrFail($args['user_id']),
+                    new UploadedFile($temporary, 'receipt.png', 'image/png', null, true),
+                );
+            } finally {
+                @unlink($temporary);
+            }
+
+            return 'created';
+        })(),
+        'confirm_receipt' => (function () use ($business, $args) {
+            [$expense, $created] = app(ExpenseReceiptService::class)->confirm(
+                $business,
+                $business->expenseReceipts()->findOrFail($args['receipt_id']),
+                User::query()->findOrFail($args['user_id']),
+                $args['values'],
+            );
+
+            return $created ? 'created' : 'existing';
         })(),
         'insert_current_raw' => (function () use ($args) {
             DB::table('subscriptions')->insert([
