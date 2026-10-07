@@ -13,16 +13,24 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   (plans, subscriptions, trial, entitlements, read-only enforcement; no payment provider).
 - **Phase 2D verification:** application-level checks are complete (full SQLite suite, Pint, build,
   SQLite browser smoke). **MySQL Stage 18 is BLOCKED and has not run**: `bizflow_phase2d_scratch`
-  was not created because `bizflow_user@localhost` cannot create databases. The real `bizflow`
-  database was not modified and `bizflow_rehearsal` was not used. Never record Stage 18 as passed
+  was not created because `bizflow_user@localhost` cannot create databases. (During that attempt the
+  real `bizflow` database was not modified and `bizflow_rehearsal` was not used; the real database
+  has since been migrated, see below.) Never record Stage 18 as passed
   until an administrator provides the scratch database and `tests/Mysql` actually passes; do not
   weaken the `scratch` guard to get around it (details in README "Phase 2D verification status").
+- **CI runs `tests/Mysql`.** The GitHub Actions job "MySQL (tests/Mysql)" runs them automatically
+  against a throwaway MySQL 8.0 service container and a scratch database (`bizflow_ci_scratch`).
+  That is **not** the local Stage 18 rehearsal on the project's own MySQL: Stage 18 is still
+  unverified. The job passed at `1ff803d`. An earlier run at `df7f662` failed in the same job; its
+  cause was never captured, it was not reproduced at `1ff803d`, and it remains unknown.
 - **Phase 2E (receipt OCR capture) is implemented on `feature/expense-ocr` with the demo provider
   only.** `FakeReceiptOcrProvider` returns fixed data; **no real OCR provider has been selected or
   integrated** and no external OCR API may be called without an approved design. Its OCR limits
   (Trial 20, Free 0, Legacy unlimited, paid 100) are development placeholders. The Phase 2E
-  migrations have **not** been run against the real `bizflow` database, and MySQL scratch
-  verification is still blocked (same blocker as Phase 2D).
+  migrations **have been run** against the real `bizflow` database (migration batch 10, after the
+  Phase 2D migrations in batch 9), and a demo receipt created by the fake provider (confirmed, with
+  its expense) currently exists there. Local MySQL scratch verification (Stage 18) is still blocked
+  (same blocker as Phase 2D).
 - The next phase after that is not yet specified and must be decided separately.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.

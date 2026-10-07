@@ -368,8 +368,11 @@ never renumbered, and issuing re-checks that the invoice is still a draft under 
   foreign-key restrictions, index use (`EXPLAIN`) and `ONLY_FULL_GROUP_BY` — was verified
   separately against MySQL 8.0.46, inside transactions that were rolled back.
 - Browser smoke tests on a throwaway SQLite database covered the main flows, mobile width and printing.
-- The default automated suite does **not** run against MySQL. The commercial layer's
-  concurrency and MySQL-specific tests (`tests/Mysql`) are opt-in against a scratch database.
+- The default automated suite (`php artisan test`) does **not** run against MySQL. The commercial
+  layer's concurrency and MySQL-specific tests (`tests/Mysql`) are skipped locally unless
+  `BIZFLOW_MYSQL_SCRATCH` names a scratch database, but GitHub Actions runs them automatically in
+  the "MySQL (tests/Mysql)" job against a throwaway MySQL 8.0 container (see "Phase 2D verification
+  status").
 
 ## Setup
 
@@ -491,8 +494,9 @@ php artisan test tests/Feature/Billing tests/Unit/Billing
 
 Concurrency and MySQL-specific behaviour of the commercial layer (the unique `NULL` key, foreign
 keys, two requests racing at a limit, concurrent plan changes) is in `tests/Mysql`. Those tests
-are **skipped** unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its name must contain
-`scratch`, and it is rebuilt with `migrate:fresh`); they never run against the `bizflow` database.
+are **skipped** locally unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its name must
+contain `scratch`, and it is rebuilt with `migrate:fresh`); they never run against the `bizflow`
+database. GitHub Actions runs them automatically in its own MySQL 8.0 service container.
 
 `php artisan test` never touches the MySQL database. Because SQLite and MySQL differ in
 `DECIMAL` handling, foreign-key enforcement, query planning and SQL modes such as
@@ -504,10 +508,13 @@ Application-level verification: the full suite (1,575 tests, 6,148 assertions) p
 SQLite, Pint passes, and the receipt tests (`tests/Feature/ExpenseReceipts`,
 `tests/Unit/Ocr`) run on in-memory SQLite with a faked disk and queue, and a browser smoke test
 at 375px passed against a throwaway SQLite database (upload, review, confirm, double submit,
-private file headers). **MySQL scratch verification is still BLOCKED and has not run** (see
-below): the new migrations, the unique `expense_id`, the foreign keys and the row locks that
-stop two requests passing the monthly limit or confirming twice have not been exercised on
-MySQL. The real `bizflow` database has **not** been migrated for Phase 2E.
+private file headers). **Local MySQL scratch verification (Stage 18) is still BLOCKED and has not
+run** (see below). The MySQL tests for the receipt migrations, the unique `expense_id`, the foreign
+keys and the row locks that stop two requests passing the monthly limit or confirming twice are
+part of `tests/Mysql`, which CI runs (see below), but they have not been run in the local rehearsal.
+The Phase 2E migrations **have been run** against the real `bizflow` database (migration batch 10,
+after Phase 2D's batch 9), and a demo receipt created by the fake OCR provider (confirmed, with its
+expense) currently exists there.
 
 ### Phase 2D verification status
 
@@ -522,18 +529,36 @@ unavailable due to current MySQL account privileges.
 - The application account, `bizflow_user@localhost`, has privileges only on `bizflow.*` and
   `bizflow_rehearsal.*` and cannot create a new database. Laravel's normal BizFlow MySQL
   connection itself was verified to work.
-- `bizflow` was **not modified**, and `bizflow_rehearsal` was **not used** (the test guard
+- During that attempt `bizflow` was **not modified**, and `bizflow_rehearsal` was **not used** (the test guard
   rejects any name without `scratch`, and that guard was left unchanged).
-- The 22 tests in `tests/Mysql` are written but have **never run**, so none of the following is
-  verified on MySQL: the unique `NULL` key semantics, foreign-key restrictions, the backfill's
-  `INSERT IGNORE`, rollback and re-migration, concurrent customer/product/invoice limits,
-  concurrent plan changes, lock ordering and deadlocks, and one-trial-ever under concurrency.
+- At the time of that attempt, the 22 tests in `tests/Mysql` were written but had **never run**, so
+  nothing in this list was verified on MySQL: the unique `NULL` key semantics, foreign-key
+  restrictions, the backfill's `INSERT IGNORE`, rollback and re-migration, concurrent
+  customer/product/invoice limits, concurrent plan changes, lock ordering and deadlocks, and
+  one-trial-ever under concurrency. They have since been added to CI (next section); the local
+  Stage 18 rehearsal itself has **not** been done.
 - **To resume:** an authorized MySQL administrator creates `bizflow_phase2d_scratch`
   (utf8mb4) and grants `bizflow_user` privileges on that database only. Then run
   `BIZFLOW_MYSQL_SCRATCH=bizflow_phase2d_scratch php artisan test tests/Mysql`.
 
-Do not migrate the real dev database for Phase 2D until Stage 18 has passed. The next phase is
-not yet specified and must be decided separately.
+**MySQL tests in GitHub Actions.** The "MySQL (tests/Mysql)" job in `.github/workflows/ci.yml`
+runs `tests/Mysql` automatically on pull requests and on pushes to `main`, against a throwaway
+`mysql:8.0` service container with a scratch database (`bizflow_ci_scratch`) and CI-only
+credentials; it never touches the `bizflow` database. This is **not** the local Stage 18
+rehearsal: it uses a different MySQL instance and account, so it does not verify the project's own
+MySQL 8.0.46 install or its privileges, and Stage 18 must not be recorded as passed because of it.
+On PR #1 the job passed at commit `1ff803d`. An earlier run at `df7f662` failed in the same job
+with an unknown cause (no per-test output was captured). That failure was not reproduced at
+`1ff803d`, but its cause remains unknown, so the job's stability is not established.
+
+The real `bizflow` database has since been migrated for Phase 2D (migration batch 9) and Phase 2E
+(batch 10) even though Stage 18 had not been run locally.
+
+Future database-changing phases should not be applied to the real development database until the
+corresponding local verification/rehearsal gate has been completed, unless explicitly reviewed and
+approved.
+
+The next phase is not yet specified and must be decided separately.
 
 ## Known limitations and future scope
 
