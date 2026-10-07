@@ -41,6 +41,17 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      # The views use @vite(), so the feature tests need public/build/manifest.json (gitignored).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build frontend assets
+        run: |
+          npm ci
+          npm run build
+
       # The tests run on in-memory SQLite (phpunit.xml); they only need an application key.
       - name: Prepare environment
         run: |

@@ -158,7 +158,14 @@ class SubscriptionMysqlTest extends MysqlTestCase
         $fresh = Plan::query()->findOrFail($plan->getKey());
 
         $this->assertSame('1234567.89', (string) $fresh->price);
-        $this->assertSame(['customers.max' => null, 'products.max' => 0, 'invoices.email' => true], $fresh->entitlements);
+        // MySQL's JSON type does not keep object key order, so compare by key; assertSame still
+        // tells null from 0 and true from 1.
+        $expected = ['customers.max' => null, 'products.max' => 0, 'invoices.email' => true];
+        $actual = $fresh->entitlements;
+        ksort($expected);
+        ksort($actual);
+
+        $this->assertSame($expected, $actual);
     }
 
     // ---- backfill, rollback, re-migration -------------------------------------------------
