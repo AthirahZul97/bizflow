@@ -145,5 +145,80 @@ jobs:
 
       # The tests build their own schema (migrate:fresh on the scratch database), so there is no
       # separate migrate step.
+      # DIAGNOSTIC: the same command, with its console output and a JUnit report captured, so the
+      # failing test and message can be read from the run summary and annotations (the job log needs
+      # a GitHub sign-in). `-e` (and `-o pipefail`, if a `shell:` is ever set) would end the script on a
+      # failing test before the report, so `-e` is off for the pipeline only; the command's own status
+      # is read from PIPESTATUS and re-raised by the final `exit`.
       - name: MySQL tests
-        run: php artisan test tests/Mysql
+        run: |
+          log="$RUNNER_TEMP/mysql-tests.log"
+          junit="$RUNNER_TEMP/mysql-junit.xml"
+
+          set +e
+          php artisan test tests/Mysql --log-junit="$junit" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          # Report only; this never changes the step's result.
+          MYSQL_TESTS_STATUS="$status" MYSQL_TESTS_LOG="$log" MYSQL_TESTS_JUNIT="$junit" php <<'PHP' || true
+          <?php
+          $status = (int) getenv('MYSQL_TESTS_STATUS');
+          $summaryFile = getenv('GITHUB_STEP_SUMMARY');
+          $esc = fn (string $s) => str_replace(['%', "\r", "\n"], ['%25', '%0D', '%0A'], $s);
+
+          $out = "### MySQL tests (tests/Mysql): exit status {$status}\n\n";
+          $failures = [];
+          $totals = null;
+
+          $junit = (string) getenv('MYSQL_TESTS_JUNIT');
+          if (is_file($junit) && ($xml = @simplexml_load_file($junit)) !== false) {
+              $suite = $xml->getName() === 'testsuites' ? ($xml->testsuite[0] ?? $xml) : $xml;
+              $totals = sprintf(
+                  'Tests: %s, Assertions: %s, Failures: %s, Errors: %s, Warnings: %s, Skipped: %s',
+                  $suite['tests'], $suite['assertions'], $suite['failures'], $suite['errors'], $suite['warnings'] ?? 0, $suite['skipped'] ?? 0,
+              );
+              foreach ($xml->xpath('//testcase') as $case) {
+                  foreach (['failure', 'error', 'warning'] as $kind) {
+                      if (isset($case->$kind)) {
+                          $failures[] = [$kind, $case['class'].'::'.$case['name'], trim((string) $case->$kind)];
+                      }
+                  }
+              }
+          } else {
+              $out .= "No readable JUnit report was written (the run may have stopped before PHPUnit finished).\n\n";
+          }
+
+          if ($totals !== null) {
+              $out .= "**{$totals}**\n\n";
+              echo "PHPUnit: {$totals}\n";
+          }
+
+          foreach ($failures as [$kind, $name, $message]) {
+              $head = implode("\n", array_slice(preg_split('/\R/', $message), 0, 25));
+              $out .= "#### {$kind}: `{$name}`\n```\n{$head}\n```\n";
+              echo "::error title=MySQL test {$kind}: {$name}::".$esc(mb_substr($head, 0, 1500))."\n";
+          }
+
+          // The console failure report as well, whatever the JUnit file held (cleaned of colour codes).
+          if ($status !== 0 && is_file($log = (string) getenv('MYSQL_TESTS_LOG'))) {
+              $lines = preg_split('/\R/', preg_replace('/\e\[[0-9;]*m/', '', (string) file_get_contents($log)));
+              $from = 0;
+              foreach ($lines as $i => $line) {
+                  if (str_contains($line, 'FAILED') || str_contains($line, 'Fatal error') || str_contains($line, 'Exception')) {
+                      $from = $i;
+                      break;
+                  }
+              }
+              $out .= "#### Console output from the first failure\n```\n".implode("\n", array_slice($lines, $from, 200))."\n```\n";
+              if ($failures === []) {
+                  echo '::error title=MySQL tests: no JUnit failure; console tail::'.$esc(implode("\n", array_slice($lines, -25)))."\n";
+              }
+          }
+
+          if ($summaryFile) {
+              file_put_contents($summaryFile, $out, FILE_APPEND);
+          }
+          PHP
+
+          exit "$status"
