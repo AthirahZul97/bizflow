@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * The tenant. Every customer, product, invoice and expense belongs to exactly one
@@ -99,11 +100,40 @@ class Business extends Model
     }
 
     /**
+     * @return HasMany<ExpenseReceipt, $this>
+     */
+    public function expenseReceipts(): HasMany
+    {
+        return $this->hasMany(ExpenseReceipt::class);
+    }
+
+    /**
      * @return HasMany<RecurringInvoice, $this>
      */
     public function recurringInvoices(): HasMany
     {
         return $this->hasMany(RecurringInvoice::class);
+    }
+
+    /**
+     * The business's whole subscription history, current and past.
+     *
+     * @return HasMany<Subscription, $this>
+     */
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    /**
+     * The one subscription that is current (is_current = 1), if any. Access is not read
+     * from it directly: use App\Billing\EntitlementService.
+     *
+     * @return HasOne<Subscription, $this>
+     */
+    public function currentSubscription(): HasOne
+    {
+        return $this->hasOne(Subscription::class)->where('is_current', 1);
     }
 
     /**

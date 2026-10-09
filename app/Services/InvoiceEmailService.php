@@ -2,7 +2,10 @@
 
 namespace App\Services;
 
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Enums\InvoiceEmailStatus;
+use App\Exceptions\EntitlementException;
 use App\Exceptions\InvoiceEmailException;
 use App\Jobs\SendInvoiceEmail;
 use App\Mail\InvoiceMail;
@@ -52,6 +55,8 @@ class InvoiceEmailService
      */
     private const TRANSACTION_ATTEMPTS = 3;
 
+    public function __construct(private readonly EntitlementService $entitlements) {}
+
     /**
      * The addresses the invoice may be sent to: the one copied onto the invoice
      * and, when different, the customer's current one. Missing ones are null.
@@ -84,6 +89,14 @@ class InvoiceEmailService
             $invoice = Invoice::query()->whereKey($invoice->getKey())->lockForUpdate()->firstOrFail();
             $this->ensureBelongsTo($invoice, $business);
             $invoice->setRelation('business', $business);
+
+            // The plan must include emailing and the subscription must allow writes. Read fresh:
+            // the memoized answer could predate a subscription change.
+            $entitled = $this->entitlements->fresh($business)->check(Entitlement::InvoiceEmail);
+
+            if (! $entitled->allowed) {
+                throw EntitlementException::denied($entitled);
+            }
 
             if (! $this->isSendable($invoice)) {
                 throw new InvoiceEmailException($invoice->status->isCancelled()
@@ -160,6 +173,16 @@ class InvoiceEmailService
             }
 
             $invoice->load('business');
+
+            // Entitlement can be lost between queueing and sending (a lapse or a downgrade).
+            // Fail the row for good: retrying later would send an email the plan no longer allows.
+            $entitled = $this->entitlements->fresh($invoice->business)->check(Entitlement::InvoiceEmail);
+
+            if (! $entitled->allowed) {
+                $this->finish($email, InvoiceEmailStatus::Failed, 'Not sent: '.$entitled->message());
+
+                return null;
+            }
 
             $claimed = InvoiceEmail::query()
                 ->whereKey($email->getKey())

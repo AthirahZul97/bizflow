@@ -41,6 +41,11 @@
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('reports.*')) active @endif" href="{{ route('reports.summary') }}">Reports</a>
                         </li>
+                        @if (! empty($showBillingNav))
+                            <li class="nav-item">
+                                <a class="nav-link @if (request()->routeIs('billing.*')) active @endif" href="{{ route('billing.show') }}">Billing</a>
+                            </li>
+                        @endif
                     @endauth
                     <li class="nav-item">
                         <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>
@@ -79,6 +84,8 @@
 
     <main class="flex-grow-1 py-4">
         <div class="container">
+            @include('partials._subscription-notice')
+
             @if (session('status'))
                 <div class="alert alert-success alert-dismissible fade show" role="alert">
                     {{ session('status') }}

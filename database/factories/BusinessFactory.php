@@ -4,6 +4,7 @@ namespace Database\Factories;
 
 use App\Enums\BusinessRole;
 use App\Models\Business;
+use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use WeakMap;
@@ -23,6 +24,13 @@ class BusinessFactory extends Factory
     private static ?WeakMap $withoutOwner = null;
 
     /**
+     * Businesses that must be created without a subscription (see withoutSubscription()).
+     *
+     * @var WeakMap<Business, true>|null
+     */
+    private static ?WeakMap $withoutSubscription = null;
+
+    /**
      * Define the model's default state. The profile is left empty, like a new account.
      *
      * @return array<string, mixed>
@@ -40,6 +48,12 @@ class BusinessFactory extends Factory
     public function configure(): static
     {
         return $this->afterCreating(function (Business $business) {
+            // Like the backfill: every business has a current Legacy subscription (no limits),
+            // so tests only see commercial limits when they ask for them.
+            if (! isset(self::withoutSubscriptionMap()[$business])) {
+                Subscription::factory()->for($business)->create();
+            }
+
             if (isset(self::withoutOwnerMap()[$business])) {
                 return;
             }
@@ -76,6 +90,24 @@ class BusinessFactory extends Factory
             'postcode' => '53100',
             'country' => 'Malaysia',
         ]);
+    }
+
+    /**
+     * Create the business without any subscription, for tests of the fail-closed path.
+     */
+    public function withoutSubscription(): static
+    {
+        return $this->afterMaking(function (Business $business) {
+            self::withoutSubscriptionMap()[$business] = true;
+        });
+    }
+
+    /**
+     * @return WeakMap<Business, true>
+     */
+    private static function withoutSubscriptionMap(): WeakMap
+    {
+        return self::$withoutSubscription ??= new WeakMap;
     }
 
     /**

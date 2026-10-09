@@ -2,14 +2,22 @@
 
 namespace App\Policies;
 
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Models\Customer;
 use App\Models\User;
+use App\Policies\Concerns\ChecksSubscription;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class CustomerPolicy
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    use ChecksSubscription;
+
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementService $entitlements,
+    ) {}
 
     /**
      * Any authenticated user may list customers; the query itself is scoped to them.
@@ -20,11 +28,12 @@ class CustomerPolicy
     }
 
     /**
-     * Any authenticated user may create customers for themselves.
+     * Any authenticated user may create customers for themselves, while the subscription
+     * allows writes and the plan has room for one more.
      */
-    public function create(User $user): bool
+    public function create(User $user): Response
     {
-        return true;
+        return $this->subscriptionAllows(Entitlement::Customers);
     }
 
     /**
@@ -40,7 +49,7 @@ class CustomerPolicy
      */
     public function update(User $user, Customer $customer): Response
     {
-        return $this->owns($user, $customer);
+        return $this->ownsForWrite($user, $customer);
     }
 
     /**
@@ -48,7 +57,17 @@ class CustomerPolicy
      */
     public function delete(User $user, Customer $customer): Response
     {
-        return $this->owns($user, $customer);
+        return $this->ownsForWrite($user, $customer);
+    }
+
+    /**
+     * Ownership first (404 for another business), then the subscription must allow writes (403).
+     */
+    private function ownsForWrite(User $user, Customer $customer): Response
+    {
+        $ownership = $this->owns($user, $customer);
+
+        return $ownership->denied() ? $ownership : $this->subscriptionAllowsWrites();
     }
 
     /**

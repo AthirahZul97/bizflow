@@ -38,6 +38,18 @@ return [
             'report' => false,
         ],
 
+        // Uploaded receipts. Private: no url, outside every served disk root (not under app/private or
+        // app/public), not served by the framework; the only way to read a
+        // file is ExpenseReceiptFileController, behind authentication and ExpenseReceiptPolicy.
+        'receipts' => [
+            'driver' => 'local',
+            'root' => storage_path('app/receipts'),
+            'visibility' => 'private',
+            'serve' => false,
+            'throw' => true,
+            'report' => false,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

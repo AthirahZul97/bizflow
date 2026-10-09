@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Expense extends Model
 {
@@ -81,6 +82,16 @@ class Expense extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * The receipt this expense was created from, if it came from a scanned receipt.
+     *
+     * @return HasOne<ExpenseReceipt, $this>
+     */
+    public function receipt(): HasOne
+    {
+        return $this->hasOne(ExpenseReceipt::class);
     }
 
     /**

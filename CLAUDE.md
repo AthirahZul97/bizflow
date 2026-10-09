@@ -9,7 +9,29 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   Expenses, Dashboard and Reports.
 - Phase 2 so far: invoice PDF download; Phase 2A, the business tenancy foundation with a
   business profile; Phase 2B, emailing invoices (queued, with send history); Phase 2C, recurring
-  invoices (scheduled generation of draft invoices). Next approved phase: 2D Commercial SaaS.
+  invoices (scheduled generation of draft invoices); Phase 2D, the SaaS commercial foundation
+  (plans, subscriptions, trial, entitlements, read-only enforcement; no payment provider).
+- **Phase 2D verification:** application-level checks are complete (full SQLite suite, Pint, build,
+  SQLite browser smoke). **MySQL Stage 18 is BLOCKED and has not run**: `bizflow_phase2d_scratch`
+  was not created because `bizflow_user@localhost` cannot create databases. (During that attempt the
+  real `bizflow` database was not modified and `bizflow_rehearsal` was not used; the real database
+  has since been migrated, see below.) Never record Stage 18 as passed
+  until an administrator provides the scratch database and `tests/Mysql` actually passes; do not
+  weaken the `scratch` guard to get around it (details in README "Phase 2D verification status").
+- **CI runs `tests/Mysql`.** The GitHub Actions job "MySQL (tests/Mysql)" runs them automatically
+  against a throwaway MySQL 8.0 service container and a scratch database (`bizflow_ci_scratch`).
+  That is **not** the local Stage 18 rehearsal on the project's own MySQL: Stage 18 is still
+  unverified. The job passed at `1ff803d`. An earlier run at `df7f662` failed in the same job; its
+  cause was never captured, it was not reproduced at `1ff803d`, and it remains unknown.
+- **Phase 2E (receipt OCR capture) is implemented on `feature/expense-ocr` with the demo provider
+  only.** `FakeReceiptOcrProvider` returns fixed data; **no real OCR provider has been selected or
+  integrated** and no external OCR API may be called without an approved design. Its OCR limits
+  (Trial 20, Free 0, Legacy unlimited, paid 100) are development placeholders. The Phase 2E
+  migrations **have been run** against the real `bizflow` database (migration batch 10, after the
+  Phase 2D migrations in batch 9), and a demo receipt created by the fake provider (confirmed, with
+  its expense) currently exists there. Local MySQL scratch verification (Stage 18) is still blocked
+  (same blocker as Phase 2D).
+- The next phase after that is not yet specified and must be decided separately.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
 
@@ -61,17 +83,78 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   transaction. Recurring dates are always calculated from the start date (`RecurringSchedule`).
 - Recurring invoices generate drafts only; they never issue, number or email by themselves.
 
+## Subscriptions and entitlements
+
+- **The business is the subscriber.** `subscriptions` belong to a business (history rows; exactly one
+  has `is_current = 1`, ended rows have `NULL`; `UNIQUE (business_id, is_current)`). Only
+  `SubscriptionService` writes subscriptions: it locks the business row, re-reads the current row,
+  validates, and mutates in one transaction. A row is never edited into a different plan: end it
+  as `replaced` and start a new one.
+- **`plans` is the one table without `business_id`:** it is shared platform catalogue data, not
+  business data. A plan row is an immutable version (`UNIQUE (code, version)`): never change the
+  commercial terms of a plan a subscription references (new version instead); retire with
+  `is_active = false`; never delete a referenced plan.
+- **Never write `if ($plan === 'pro')` or compare a subscription's `status` to decide anything.**
+  Ask `EntitlementService::for($business)` (`access()`, `allows()`, `check()`, `limit()`, `used()`,
+  `remaining()`). Access is derived from dates by `AccessResolver`; the stored status may lag.
+  An entitlement a plan does not mention is denied. Add a new one as an `Entitlement` case (+ a
+  `UsageMeter` for a limit), enforce it where it is used, and put a value in a new plan version.
+- **Enforcement has four layers and all four must hold:** services (authoritative; they re-check
+  with `EntitlementService::fresh()` after taking the business row lock, never the memo),
+  `EntitlementGuard::create()` for records without a service (customers, products), policies
+  (ownership first = 404, then subscription = 403), and the fail-closed `subscription.writable`
+  middleware (unsafe methods refused while read-only except the three allow-listed `billing.*`
+  routes, running before route-model binding). New business write routes go inside the `business`
+  route group; do not allow-list them.
+- **Read-only never deletes or mutates business data.** Reads, existing PDFs, reports, billing and
+  logout keep working. Recurring schedules are skipped untouched and catch up later.
+- **Downgrades** apply at period end through `subscriptions.pending_plan_id` (only a Free plan in
+  self-service); access only switches to it once its period has begun.
+- **Self-service never grants a paid plan.** Only `billing:assign` (operator) or, later, a payment
+  provider through `SubscriptionService` starts a paid plan. Do not build checkout or touch a
+  provider without an approved design.
+- **SaaS billing is not customer invoicing.** Never reuse the `invoices` tables, `InvoiceService`
+  or invoice numbering for subscription charges. Provider-specific code lives only in
+  `app/Billing/Providers/<Name>` behind `BillingProvider`.
+- The payment, billing-event and billing-history tables, billing emails and SST/tax on BizFlow's own
+  charges are deferred; the SST decision must be made before the first paying customer. Placeholder
+  prices and limits (the Trial and Free plans, `PlanSeeder`) are not approved commercial terms.
+- Run the commercial tests with `php artisan test tests/Feature/Billing tests/Unit/Billing`; the
+  MySQL concurrency tests in `tests/Mysql` are opt-in (`BIZFLOW_MYSQL_SCRATCH`, a scratch database).
+
+## Receipt OCR (Phase 2E)
+
+- **OCR never creates an expense.** Only `ExpenseReceiptService::confirm()` does, for a receipt in
+  `review`, with the values the user submitted, in one transaction under the receipt's row lock.
+  `expense_receipts.expense_id` is unique. Keep `ExpenseController` independent of it.
+- `expense_receipts` is business data (`business_id` required, never fillable); `uploaded_by` and
+  `confirmed_by` are audit metadata only. Only `ExpenseReceiptService` writes it; query it from
+  `$business->expenseReceipts()`.
+- Providers sit behind `App\Ocr\ReceiptOcrProvider`; whatever they return goes through
+  `ReceiptExtractionNormalizer`. Never store raw provider responses or OCR text, never log
+  receipt contents, and never put the client filename in a path.
+- Files are on the private `receipts` disk and are only served by the policy-checked file route.
+- The monthly OCR allowance is the `Entitlement::ReceiptOcr` limit, counted by
+  `MonthlyReceiptOcrMeter` from `expense_receipts.counted_at`. A unit is taken at upload (and when
+  retrying a failed receipt) under the business row lock, and released by a technical failure or a
+  discard before extraction. Confirming uses none.
+
 ## Scheduled work
 
 - Scheduled commands are system tasks: they have no current user or request, never use
   `CurrentBusiness`, and walk `Business` rows, handing each to a service explicitly.
 - They must be safe to run at any time, more than once, and concurrently: decide what is due from
   data, take a row lock, and rely on a database constraint as the final guarantee.
+- Subscriptions need **no scheduled job**: access is derived from dates on every check. A scheduled
+  command that does business work (recurring generation) must skip, not fail, a business whose
+  subscription does not allow it, and must leave that business's records untouched.
 
 ## Queued work
 
 - Use Laravel's database queue; no Redis/Horizon. Jobs carry only IDs, re-read and re-check state
   when they run, and implement `ShouldQueueAfterCommit` when dispatched inside a transaction.
+- A job that needs an entitlement (invoice email) re-checks it when it claims its row and, if it
+  has been lost, fails the row for good rather than retrying.
 - Every side effect has a tracking row whose state changes are conditional updates
   (`where status = ...`), so a retried or duplicated job can never repeat the side effect.
 - Retry only failures that may be temporary; when unsure, retry rather than fail.

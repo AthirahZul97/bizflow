@@ -31,6 +31,12 @@
                         <dt class="col-sm-3">Payee</dt>
                         <dd class="col-sm-9">{{ $expense->payee ?? '—' }}</dd>
 
+                        @php $receipt = $expense->receipt; @endphp
+                        @if ($receipt)
+                            <dt class="col-sm-3">Receipt</dt>
+                            <dd class="col-sm-9"><a href="{{ route('expense-receipts.show', $receipt) }}">View scanned receipt</a></dd>
+                        @endif
+
                         <dt class="col-sm-3">Notes</dt>
                         <dd class="col-sm-9 mb-0">
                             @if ($expense->notes)

@@ -2,8 +2,11 @@
 
 namespace App\Policies;
 
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Models\RecurringInvoice;
 use App\Models\User;
+use App\Policies\Concerns\ChecksSubscription;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
@@ -13,16 +16,21 @@ use Illuminate\Auth\Access\Response;
  */
 class RecurringInvoicePolicy
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    use ChecksSubscription;
+
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementService $entitlements,
+    ) {}
 
     public function viewAny(User $user): bool
     {
         return true;
     }
 
-    public function create(User $user): bool
+    public function create(User $user): Response
     {
-        return true;
+        return $this->subscriptionAllows(Entitlement::RecurringInvoices);
     }
 
     public function view(User $user, RecurringInvoice $recurringInvoice): Response
@@ -79,6 +87,11 @@ class RecurringInvoicePolicy
 
         if ($ownership->denied()) {
             return $ownership;
+        }
+
+        // Every ability that goes through here changes the schedule, so it needs write access.
+        if (($subscription = $this->subscriptionAllowsWrites())->denied()) {
+            return $subscription;
         }
 
         return $allowed ? Response::allow() : Response::deny($message);

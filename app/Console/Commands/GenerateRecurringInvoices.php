@@ -40,11 +40,21 @@ class GenerateRecurringInvoices extends Command
         $today = today();
         $generated = 0;
         $failed = 0;
+        $skipped = 0;
 
         Business::query()
             ->whereHas('recurringInvoices', fn (Builder $query) => $query->due($today))
-            ->chunkById(100, function ($businesses) use ($recurringInvoices, $today, &$generated, &$failed) {
+            ->chunkById(100, function ($businesses) use ($recurringInvoices, $today, &$generated, &$failed, &$skipped) {
                 foreach ($businesses as $business) {
+                    // No write access or no recurring invoices on the plan: skip the business and
+                    // leave its schedules untouched; they catch up when access returns.
+                    if ($recurringInvoices->generationBlock($business) !== null) {
+                        $skipped++;
+                        $this->line("Business {$business->getKey()} skipped: its subscription does not allow recurring invoices.");
+
+                        continue;
+                    }
+
                     $due = $business->recurringInvoices()->due($today)->orderBy('id')->get();
 
                     /** @var RecurringInvoice $recurring */
@@ -61,6 +71,10 @@ class GenerateRecurringInvoices extends Command
             });
 
         $this->info("Generated {$generated} invoice(s); {$failed} recurring invoice(s) failed.");
+
+        if ($skipped > 0) {
+            $this->info("Skipped {$skipped} business(es) whose subscription does not allow recurring invoices.");
+        }
 
         return self::SUCCESS;
     }
