@@ -115,15 +115,18 @@ class InvoiceService
             $this->ensureStatus($invoice, InvoiceStatus::Draft, 'Only draft invoices can be issued.');
             $this->ensureTransition($invoice, InvoiceStatus::Issued, 'Only draft invoices can be issued.');
 
-            // Before the first plain read in this transaction: under REPEATABLE READ that read fixes
-            // the snapshot, and the count must see what a racing issue committed while we waited for the lock.
-            $this->ensureWithinMonthlyLimit($invoice);
+            // Take the business lock before the first plain read in this transaction: under REPEATABLE READ
+            // that read fixes the snapshot, and the limit count below must see what a racing issue
+            // committed while we waited for the lock.
+            EntitlementGuard::lock($invoice->business_id);
 
             $items = $invoice->items()->get();
 
             if ($items->isEmpty()) {
                 throw new InvoiceStateException('An invoice needs at least one line before it can be issued.');
             }
+
+            $this->ensureWithinMonthlyLimit($invoice);
 
             $totals = $this->calculator->calculate(
                 $items->map(fn ($item) => ['quantity' => $item->quantity, 'unit_price' => $item->unit_price])->all(),

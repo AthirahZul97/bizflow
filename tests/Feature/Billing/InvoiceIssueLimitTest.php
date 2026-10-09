@@ -7,6 +7,7 @@ use App\Enums\DenyReason;
 use App\Enums\Entitlement;
 use App\Enums\InvoiceStatus;
 use App\Exceptions\EntitlementException;
+use App\Exceptions\InvoiceStateException;
 use App\Models\Invoice;
 use App\Models\User;
 use App\Services\InvoiceService;
@@ -47,6 +48,19 @@ class InvoiceIssueLimitTest extends TestCase
 
         $this->assertSame(InvoiceStatus::Issued, $second->status);
         $this->assertSame('INV-00002', $second->invoice_number);
+    }
+
+    public function test_an_empty_draft_at_the_monthly_limit_still_gets_the_missing_lines_error(): void
+    {
+        $this->limitTo($this->owner, ['invoices.monthly_max' => 1]);
+        $this->issuedFor($this->owner);
+        $draft = $this->draftFor($this->owner);
+        $draft->items()->delete();
+
+        $this->expectException(InvoiceStateException::class);
+        $this->expectExceptionMessage('An invoice needs at least one line before it can be issued.');
+
+        app(InvoiceService::class)->issue($draft);
     }
 
     public function test_issuing_at_the_monthly_limit_is_refused_and_the_invoice_stays_a_draft(): void
