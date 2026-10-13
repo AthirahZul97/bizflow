@@ -17,6 +17,7 @@ use App\Ocr\NormalizedReceipt;
 use App\Ocr\ReceiptExtractionNormalizer;
 use App\Services\ExpenseReceiptService;
 use App\Services\ReceiptFileInspector;
+use Carbon\CarbonInterface;
 use Closure;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -128,11 +129,11 @@ class ReceiptRecoveryTest extends TestCase
                 return parent::markForRetry($receipt, $error);
             }
 
-            public function markFailed(int $receiptId, string $error, ?int $attempt = null): bool
+            public function markFailed(int $receiptId, string $error, ?int $attempt = null, ?CarbonInterface $claimStartedAt = null): bool
             {
                 $this->failIf('markFailed');
 
-                return parent::markFailed($receiptId, $error, $attempt);
+                return parent::markFailed($receiptId, $error, $attempt, $claimStartedAt);
             }
 
             protected function dispatchProcessing(int $receiptId): void
@@ -368,7 +369,7 @@ class ReceiptRecoveryTest extends TestCase
         // The old worker finishes late, in every way it can.
         $this->assertFalse($this->service()->markExtracted($old, $this->normalized()));
         $this->assertFalse($this->service()->markForRetry($old, 'late retry'));
-        $this->assertFalse($this->service()->markFailed($old->getKey(), 'late failure', $old->attempts));
+        $this->assertFalse($this->service()->markFailed($old->getKey(), 'late failure', $old->attempts, $old->processing_started_at));
 
         $receipt->refresh();
         $this->assertSame(ExpenseReceiptStatus::Processing, $receipt->status, 'the newer attempt is untouched');
@@ -395,7 +396,7 @@ class ReceiptRecoveryTest extends TestCase
 
         $this->assertFalse($this->service()->markExtracted($old, $this->normalized()));
         $this->assertFalse($this->service()->markForRetry($old, 'late'));
-        $this->assertFalse($this->service()->markFailed($old->getKey(), 'late', $old->attempts));
+        $this->assertFalse($this->service()->markFailed($old->getKey(), 'late', $old->attempts, $old->processing_started_at));
 
         $receipt->refresh();
         $this->assertSame(ExpenseReceiptStatus::Confirmed, $receipt->status);
@@ -407,6 +408,133 @@ class ReceiptRecoveryTest extends TestCase
         [$again, $createdAgain] = $this->service()->confirm($this->businessOf($this->user), $receipt, $this->user, $this->confirmPayload(['amount' => '1.00']));
         $this->assertFalse($createdAgain);
         $this->assertTrue($again->is($expense));
+    }
+
+    // ---- recovery revokes the previous owner before the new dispatch can race with it ---------
+
+    public function test_recovery_revokes_the_previous_owner_before_the_new_worker_has_claimed(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        $owner = $this->service()->claim($receipt->getKey());   // worker A, generation 1, then delayed
+        $this->travel($this->stale() + 1)->seconds();
+
+        // The sweeper takes the dispatch right and dispatches worker B, which has not claimed yet.
+        $this->assertSame(1, $this->service()->recoverStuck()['redispatched']);
+
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Processing, $row->status);
+        $this->assertSame(1, $row->attempts, 'recovery is a dispatch, not a provider attempt');
+        $this->assertNull($row->processing_started_at, 'the previous claim was revoked in the same update');
+
+        // A wakes up before B has claimed: nothing it can do changes the row.
+        $this->assertFalse($this->service()->markExtracted($owner, $this->normalized()));
+        $this->assertFalse($this->service()->markForRetry($owner, 'late retry'));
+        $this->assertFalse($this->service()->markFailed($owner->getKey(), 'late failure', $owner->attempts, $owner->processing_started_at));
+
+        $row->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Processing, $row->status);
+        $this->assertSame(1, $row->attempts);
+        $this->assertNotNull($row->counted_at, 'the quota unit is untouched');
+        $this->assertNull($row->extraction);
+        $this->assertNull($row->last_error);
+
+        // B then claims (the first real attempt after the revocation) and finishes it.
+        $provider = new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]);
+        $this->runJob($receipt, $provider);
+
+        $row->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Review, $row->status);
+        $this->assertSame(2, $row->attempts);
+        $this->assertSame(1, $provider->calls());
+        $this->assertSame(1, $this->used());
+    }
+
+    public function test_a_delayed_worker_that_finishes_after_recovery_but_before_the_new_claim_writes_nothing(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        $swept = null;
+
+        // Worker A is delayed inside its provider call; meanwhile the sweeper recovers the receipt.
+        $delayed = new ScriptedOcrProvider([function () use (&$swept) {
+            $this->travel($this->stale() + 1)->seconds();
+            $swept = $this->service()->recoverStuck();
+
+            return ScriptedOcrProvider::extraction();
+        }]);
+
+        $this->runJob($receipt, $delayed);   // A claims, reads, then tries to save its result
+
+        $this->assertSame(1, $swept['redispatched']);
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Processing, $row->status, 'A saved nothing');
+        $this->assertSame(1, $row->attempts);
+        $this->assertNull($row->extraction);
+
+        $this->runJob($receipt, new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]));
+
+        $this->assertSame(ExpenseReceiptStatus::Review, $row->refresh()->status);
+        $this->assertSame(2, $row->attempts);
+        $this->assertSame(1, $this->used());
+    }
+
+    public function test_a_delayed_worker_that_fails_after_recovery_cannot_retry_or_fail_the_receipt(): void
+    {
+        foreach ([new OcrTransientException('timed out'), new OcrPermanentException('rejected')] as $failure) {
+            $receipt = $this->uploadFor($this->user);
+            $delayed = new ScriptedOcrProvider([function () use ($failure) {
+                $this->travel($this->stale() + 1)->seconds();
+                $this->service()->recoverStuck();
+
+                return $failure;
+            }]);
+
+            $job = new ProcessExpenseReceipt($receipt->getKey());
+
+            try {
+                $job->handle($this->service(), $delayed, app(ReceiptExtractionNormalizer::class));
+            } catch (OcrTransientException $e) {
+                $job->failed($e);   // the queue's hook for the same run, holding that run's own claim
+            }
+
+            $row = $receipt->refresh();
+            $this->assertSame(ExpenseReceiptStatus::Processing, $row->status, get_class($failure).': the revoked worker changed nothing');
+            $this->assertSame(1, $row->attempts);
+            $this->assertNotNull($row->counted_at);
+            $this->assertNull($row->last_error);
+
+            $this->runJob($receipt, new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]));
+            $this->assertSame(ExpenseReceiptStatus::Review, $row->refresh()->status);
+            $this->assertSame(2, $row->attempts);
+        }
+    }
+
+    public function test_a_failed_dispatch_gives_the_claim_back_to_a_worker_that_was_in_fact_alive(): void
+    {
+        Exceptions::fake();
+        $receipt = $this->uploadFor($this->user);
+        $owner = $this->service()->claim($receipt->getKey());
+        $this->travel($this->stale() + 1)->seconds();
+
+        $this->bindService([], function (int $id, Closure $dispatch) {
+            throw new RuntimeException('the queue is down');
+        });
+        $this->assertSame(1, $this->service()->recoverStuck()['dispatch_errors']);
+
+        // Nothing was dispatched, so nothing was revoked: the original worker may still finish.
+        $this->assertTrue($owner->processing_started_at->equalTo($receipt->refresh()->processing_started_at));
+        $this->assertTrue($this->service()->markExtracted($owner, $this->normalized()));
+        $this->assertSame(ExpenseReceiptStatus::Review, $receipt->refresh()->status);
+    }
+
+    public function test_a_failure_claim_without_a_start_proves_nothing_and_fails_nothing(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        $owner = $this->service()->claim($receipt->getKey());
+
+        $this->assertFalse($this->service()->markFailed($receipt->getKey(), 'x', $owner->attempts));
+        $this->assertSame(ExpenseReceiptStatus::Processing, $receipt->refresh()->status);
+        $this->assertTrue($this->service()->markFailed($receipt->getKey(), 'x', $owner->attempts, $owner->processing_started_at));
+        $this->assertSame(ExpenseReceiptStatus::Failed, $receipt->refresh()->status);
     }
 
     // ---- concurrent recovery ----------------------------------------------------------------

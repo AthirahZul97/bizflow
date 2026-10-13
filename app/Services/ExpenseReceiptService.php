@@ -18,6 +18,7 @@ use App\Ocr\NormalizedReceipt;
 use App\Ocr\ReceiptDocument;
 use Brick\Math\BigDecimal;
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -40,17 +41,21 @@ use Throwable;
  *   never read the same receipt at once. A "processing" row whose worker died (older than
  *   ocr.stale_processing_seconds) may be reclaimed; reading a receipt has no side effect beyond
  *   its cost, so that is safe. No receipt is sent to a provider more than ocr.max_attempts times.
- * - Ownership: every claim increments attempts under the row lock, so attempts is the claim's
- *   generation. markExtracted(), markForRetry() and markFailed() only change the row while
- *   attempts still equals the generation the worker claimed, so a superseded worker (one whose
- *   claim was reclaimed) cannot overwrite the current attempt's status, result or quota unit.
+ * - Ownership: a claim is identified by the attempts counter (incremented only by claim(), under
+ *   the row lock) together with the processing_started_at that claim wrote. markExtracted(),
+ *   markForRetry() and markFailed() change the row only while both still match what the worker
+ *   claimed, so a superseded worker cannot overwrite the current attempt's status, result or
+ *   quota unit. Recovery revokes the previous owner by clearing processing_started_at in the
+ *   same conditional update that takes the right to dispatch, so the old owner is invalid
+ *   before the new dispatch exists, not only once the new worker has claimed.
  * - Recovery: recoverStuck() (receipts:recover, every minute) is the backstop that makes the
  *   guarantees above reachable. A job redelivered while a claim is still live ends without
  *   work, and a job can be lost or its worker can die, so the database row is the durable
- *   statement that work is outstanding and the sweeper re-dispatches it. It never changes a
- *   live claim's status; it takes the right to dispatch with a conditional update, then
- *   dispatches, and a crash in between only delays the next dispatch by one idle period.
- *   Duplicate dispatches are harmless: claim() decides.
+ *   statement that work is outstanding and the sweeper re-dispatches it. It takes the right to
+ *   dispatch (and revokes a stale owner) with one conditional update, then dispatches; a crash
+ *   in between only delays the next dispatch by one idle period. Duplicate dispatches are
+ *   harmless: claim() decides. A recovery dispatch is not a provider attempt: attempts changes
+ *   only when a worker claims.
  * - Confirming: under the receipt's row lock the status must be "review"; the expense, the
  *   expense_id link and the status change commit together or not at all, and expense_id is
  *   unique. Confirming again returns the existing expense.
@@ -186,7 +191,7 @@ class ExpenseReceiptService
             $entitled = $this->entitlements->fresh($business)->check(Entitlement::ReceiptOcr, 0);
 
             if (! $entitled->allowed) {
-                $this->markFailed($receipt->getKey(), 'Not read: '.$entitled->message(), $receipt->attempts);
+                $this->failAttempt($receipt->getKey(), 'Not read: '.$entitled->message(), $receipt->attempts);
 
                 return null;
             }
@@ -228,15 +233,14 @@ class ExpenseReceiptService
 
     /**
      * Save a run's result: "review" when there is a usable total, "unreadable" when there is
-     * not. Does nothing (returns false) if the receipt is no longer processing under the claim
-     * the caller holds: discarded meanwhile, or the claim was reclaimed by a newer attempt.
+     * not. Does nothing (returns false) unless the receipt is still processing under exactly the
+     * claim the caller holds: not discarded meanwhile, not reclaimed by a newer attempt, and not
+     * revoked by recovery.
      */
     public function markExtracted(ExpenseReceipt $receipt, NormalizedReceipt $result): bool
     {
-        return ExpenseReceipt::query()
-            ->whereKey($receipt->getKey())
+        return $this->whereClaimedBy(ExpenseReceipt::query()->whereKey($receipt->getKey()), $receipt)
             ->where('status', ExpenseReceiptStatus::Processing->value)
-            ->where('attempts', $receipt->attempts)
             ->update([
                 'status' => ($result->isUsable() ? ExpenseReceiptStatus::Review : ExpenseReceiptStatus::Unreadable)->value,
                 'provider' => mb_substr($result->provider, 0, 30),
@@ -251,14 +255,12 @@ class ExpenseReceiptService
 
     /**
      * Put a receipt whose attempt failed temporarily back in the queue for the next attempt.
-     * Only the claim that owns the row may do this; a superseded worker changes nothing.
+     * Only the claim that owns the row may do this; a superseded or revoked worker changes nothing.
      */
     public function markForRetry(ExpenseReceipt $receipt, string $error): bool
     {
-        return ExpenseReceipt::query()
-            ->whereKey($receipt->getKey())
+        return $this->whereClaimedBy(ExpenseReceipt::query()->whereKey($receipt->getKey()), $receipt)
             ->where('status', ExpenseReceiptStatus::Processing->value)
-            ->where('attempts', $receipt->attempts)
             ->update([
                 'status' => ExpenseReceiptStatus::Queued->value,
                 'last_error' => mb_substr($error, 0, 500),
@@ -270,18 +272,26 @@ class ExpenseReceiptService
      * Record that reading failed for good, and release the receipt's unit of allowance. Does
      * nothing (returns false) if the receipt already moved on.
      *
-     * With $attempt (the generation the caller claimed or observed) only that exact attempt can
-     * be failed, so a superseded worker cannot fail a newer attempt. Without it (the queue's
-     * failed() hook has no claim) only work nobody is running is failed: a queued row, or a
-     * processing row whose claim is stale, never a live claim.
+     * With $attempt and $claimStartedAt (the claim the caller holds: the receipt's attempts and
+     * processing_started_at as claim() returned them) only that exact claim can fail the row, so
+     * a superseded or revoked worker cannot fail a newer attempt. A claim whose start is not
+     * given cannot be proven and fails nothing. Without a claim (the queue's failed() hook for a
+     * job that never claimed) only work nobody is running is failed: a queued row, or a
+     * processing row whose claim is stale or revoked, never a live claim.
      */
-    public function markFailed(int $receiptId, string $error, ?int $attempt = null): bool
+    public function markFailed(int $receiptId, string $error, ?int $attempt = null, ?CarbonInterface $claimStartedAt = null): bool
     {
         $query = ExpenseReceipt::query()->whereKey($receiptId);
 
         if ($attempt !== null) {
+            if ($claimStartedAt === null) {
+                return false;
+            }
+
             $query->whereIn('status', [ExpenseReceiptStatus::Queued->value, ExpenseReceiptStatus::Processing->value])
-                ->where('attempts', $attempt);
+                ->where('attempts', $attempt)
+                ->whereNotNull('processing_started_at')
+                ->where('processing_started_at', $claimStartedAt);
         } else {
             $staleBefore = now()->subSeconds((int) config('ocr.stale_processing_seconds'));
 
@@ -301,9 +311,47 @@ class ExpenseReceiptService
         ]) === 1;
     }
 
+    /**
+     * Fail an attempt by its generation alone: for the callers that decide from the row itself
+     * (claim() under its lock, and the sweeper with the generation it just read), not for a
+     * worker, which must prove its claim with markFailed().
+     */
+    private function failAttempt(int $receiptId, string $error, int $attempt): bool
+    {
+        return ExpenseReceipt::query()
+            ->whereKey($receiptId)
+            ->whereIn('status', [ExpenseReceiptStatus::Queued->value, ExpenseReceiptStatus::Processing->value])
+            ->where('attempts', $attempt)
+            ->update([
+                'status' => ExpenseReceiptStatus::Failed->value,
+                'failed_at' => now(),
+                'last_error' => mb_substr($error, 0, 500),
+                'counted_at' => null,
+                'updated_at' => now(),
+            ]) === 1;
+    }
+
     private function failBecauseAttemptsAreUsedUp(int $receiptId, int $attempt): bool
     {
-        return $this->markFailed($receiptId, 'This receipt has been read too many times without success. Enter the details by hand.', $attempt);
+        return $this->failAttempt($receiptId, 'This receipt has been read too many times without success. Enter the details by hand.', $attempt);
+    }
+
+    /**
+     * Restrict an update to the claim $receipt holds (as returned by claim()): the same attempts
+     * generation and the same processing_started_at. Recovery clears processing_started_at to
+     * revoke an owner, and a NULL never matches here, so a revoked or unproven claim matches nothing.
+     *
+     * @template TBuilder of \Illuminate\Database\Eloquent\Builder
+     *
+     * @param  TBuilder  $query
+     * @return TBuilder
+     */
+    private function whereClaimedBy($query, ExpenseReceipt $receipt)
+    {
+        return $query
+            ->where('attempts', $receipt->attempts)
+            ->whereNotNull('processing_started_at')
+            ->where('processing_started_at', $receipt->processing_started_at);
     }
 
     // ---- recovery (called by receipts:recover) -----------------------------------------------
@@ -337,7 +385,7 @@ class ExpenseReceiptService
         $limit = max(1, (int) config('ocr.recovery_batch'));
 
         $candidates = DB::table('expense_receipts')
-            ->select(['id', 'status', 'attempts', 'updated_at'])
+            ->select(['id', 'status', 'attempts', 'updated_at', 'processing_started_at'])
             ->where('updated_at', '<', $idleBefore)
             ->where(function ($query) use ($staleBefore) {
                 $query->where('status', ExpenseReceiptStatus::Queued->value)
@@ -363,12 +411,24 @@ class ExpenseReceiptService
                 continue;
             }
 
+            // One conditional update both takes the right to dispatch and revokes the previous
+            // owner of a stale claim (processing_started_at cleared; claim() already treats a
+            // processing row without a start as reclaimable). The old worker is therefore invalid
+            // before the new job exists, whether or not that job has claimed yet. attempts is
+            // not touched: this is a dispatch, and only a claim is a provider attempt.
+            $processing = $row->status === ExpenseReceiptStatus::Processing->value;
+
             $won = ExpenseReceipt::query()
                 ->whereKey($id)
                 ->where('status', $row->status)
                 ->where('attempts', $attempts)
                 ->where('updated_at', $row->updated_at)
-                ->update(['updated_at' => $now]);
+                ->when($processing, fn ($query) => $row->processing_started_at === null
+                    ? $query->whereNull('processing_started_at')
+                    : $query->where('processing_started_at', $row->processing_started_at))
+                ->update($processing
+                    ? ['updated_at' => $now, 'processing_started_at' => null]
+                    : ['updated_at' => $now]);
 
             if ($won !== 1) {
                 continue;
@@ -381,9 +441,18 @@ class ExpenseReceiptService
                 report($e);
                 $result['dispatch_errors']++;
 
-                // Hand the dispatch right back so the next run retries at once. Conditional on
-                // our own value, so a change made meanwhile is never undone.
-                ExpenseReceipt::query()->whereKey($id)->where('updated_at', $now)->update(['updated_at' => $row->updated_at]);
+                // Hand the right (and the claim) back so the next run retries at once and a
+                // worker that was in fact alive may still finish. Conditional on our own values,
+                // so a change made meanwhile (a newer claim, a new status) is never undone.
+                ExpenseReceipt::query()
+                    ->whereKey($id)
+                    ->where('status', $row->status)
+                    ->where('attempts', $attempts)
+                    ->where('updated_at', $now)
+                    ->when($processing, fn ($query) => $query->whereNull('processing_started_at'))
+                    ->update($processing
+                        ? ['updated_at' => $row->updated_at, 'processing_started_at' => $row->processing_started_at]
+                        : ['updated_at' => $row->updated_at]);
             }
         }
 

@@ -8,6 +8,7 @@ use App\Ocr\Exceptions\OcrPermanentException;
 use App\Ocr\ReceiptExtractionNormalizer;
 use App\Ocr\ReceiptOcrProvider;
 use App\Services\ExpenseReceiptService;
+use Carbon\CarbonInterface;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Foundation\Queue\Queueable;
@@ -51,9 +52,12 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
     public int $timeout = 60;
 
     /**
-     * The generation this run claimed, so failed() can fail exactly that attempt.
+     * The claim this run holds (its generation and start), so failed() can fail exactly that
+     * claim and nothing a newer attempt or a recovery has since taken over.
      */
     private ?int $claimedAttempt = null;
+
+    private ?CarbonInterface $claimedStartedAt = null;
 
     public function __construct(public readonly int $expenseReceiptId) {}
 
@@ -66,6 +70,7 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
         }
 
         $this->claimedAttempt = $receipt->attempts;
+        $this->claimedStartedAt = $receipt->processing_started_at;
 
         try {
             $normalized = $normalizer->normalize($provider->extract($receipts->document($receipt)));
@@ -75,7 +80,7 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
         } catch (OcrPermanentException|OcrMalformedResponseException $e) {
             // The same input would fail the same way: fail it now; the user can retry or type it in.
             try {
-                $receipts->markFailed($receipt->getKey(), $e->getMessage(), $receipt->attempts);
+                $receipts->markFailed($receipt->getKey(), $e->getMessage(), $receipt->attempts, $receipt->processing_started_at);
             } catch (Throwable $recovery) {
                 // The row is still "processing"; let the queue retry (and failed()) and the
                 // sweeper recover it. The original failure is the one that surfaces.
@@ -106,6 +111,7 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
                 $this->expenseReceiptId,
                 $e instanceof OcrException ? $e->getMessage() : 'The receipt could not be read. Please try again.',
                 $this->claimedAttempt,
+                $this->claimedStartedAt,
             );
         } catch (Throwable $recovery) {
             // Nothing else can be done here; the sweeper finds the row and finishes the job.
