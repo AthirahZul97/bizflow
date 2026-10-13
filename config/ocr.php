@@ -40,11 +40,23 @@ return [
     | stale_processing_seconds is an attempt whose worker died: it may be reclaimed. Keep it
     | above the job's timeout.
     |
+    | receipts:recover (every minute) is what reclaims such a row: the queue alone cannot,
+    | because a job redelivered inside the stale window finds the claim still live and ends.
+    | redispatch_after_seconds is how long a row must have been idle before the sweeper
+    | dispatches it again (a stale "processing" row, or a "queued" row whose job was lost); it
+    | also throttles repeat dispatches. Keep it at least as long as the job's longest backoff so
+    | the sweeper does not race a job the queue is about to release. recovery_batch caps the rows
+    | one run handles.
+    |
     */
 
     'max_attempts' => 5,
 
     'stale_processing_seconds' => 180,
+
+    'redispatch_after_seconds' => 180,
+
+    'recovery_batch' => 100,
 
     /*
     |--------------------------------------------------------------------------
