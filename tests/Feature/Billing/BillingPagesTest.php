@@ -394,6 +394,9 @@ class BillingPagesTest extends TestCase
     {
         $this->actingAs($this->owner)->get(route('billing.cancel.confirm'))
             ->assertRedirect(route('billing.show'))->assertSessionHas('error');
+        // A browser session belongs to one account; a second user needs a second session (a session
+        // remembers the password of the account it was signed in with, and ends if another account shows up).
+        $this->flushSession();
         $this->actingAs($this->registered())->get(route('billing.cancel.confirm'))->assertRedirect(route('billing.show'));
     }
 

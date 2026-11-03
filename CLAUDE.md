@@ -1,6 +1,6 @@
 # BizFlow: Development Rules
 
-BizFlow is a Laravel 12 small-business management SaaS (PHP 8.3+, MySQL 8, Bootstrap 5, PHPUnit).
+BizFlow is a Laravel 12 small-business management SaaS (PHP 8.4.1+, MySQL 8, Bootstrap 5, PHPUnit).
 Planned modules: Authentication, Customers, Products / Services, Invoices, Expenses, Dashboard, Reports, REST API.
 
 ## Current status
@@ -31,6 +31,12 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   Phase 2D migrations in batch 9), and a demo receipt created by the fake provider (confirmed, with
   its expense) currently exists there. Local MySQL scratch verification (Stage 18) is still blocked
   (same blocker as Phase 2D).
+- **Phase 2F-2 (portfolio demo security baseline)** is implemented on `feature/security-baseline`:
+  PHP `^8.4.1`, demo mode, preflight, minimal `/health`, trusted proxies and security headers (CSP
+  report-only), login IP throttle, password reset and email verification, housekeeping and audits,
+  the route inventory test and `docs/deployment.md`. Demo accounts are **not** seeded and there is no
+  reset job: provisioning, isolation checks, cleanup and safe reset are mandatory gates before a
+  public deployment. Not yet merged; CI verification pending.
 - The next phase after that is not yet specified and must be decided separately.
 - Do not start new modules or deferred scope (see README "Known limitations and future scope")
   unless a task explicitly asks for it.
@@ -152,6 +158,48 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   last delivery ends the receipt itself. Entitlement lost at claim time fails the receipt for
   good and releases its unit (deliberate; do not change to skip-and-retry).
 
+## Security baseline and demo mode (Phase 2F-2)
+
+- **Demo mode is configuration, never request input.** `App\Support\DemoMode` reads
+  `config('bizflow.demo')` / `bizflow.registration`; nothing in a request, header or cookie may
+  change it. It only removes capabilities and never grants an entitlement or touches `business_id`.
+- **Outbound mail has three guards and all three must hold:** `InvoiceEmailService::queue()` refuses
+  before any row or job exists; `claim()` ends a queued row `skipped` when email is off; and the
+  `MessageSending` listener cancels delivery on a real transport. A cancelled message makes `send()`
+  return `null`; `SendInvoiceEmail` must never record that as sent.
+- **Routes fall into categories** (public, guest-only, authenticated without business, business,
+  framework). Only business routes take `business` + `subscription.writable`; guest and recovery routes
+  must not. `tests/Feature/Security/RouteInventoryTest.php` fails for a route that fits no category.
+  Keep a new route's category and middleware deliberate.
+- **Trust no proxy by default.** `config/trustedproxy.php` lists proxies (`TRUSTED_PROXIES`); `*` needs
+  `TRUSTED_PROXIES_ALLOW_ALL`. The login throttle keys on `$request->ip()`, so a wrong proxy setting
+  breaks it.
+- **Throttle middleware shares a counter per user (or IP) unless given a prefix**
+  (`throttle:10,1,billing`). New limits use their own prefix. (The older `throttle:N,M` routes without a
+  prefix share one counter; leave them unless asked.)
+- **Security headers are global middleware** and never overwrite a header a response already has (the
+  receipt download's stricter CSP must survive). The CSP stays **report-only** until verified in real
+  browsers. Views carry no inline script or event-handler attributes (`resources/js/page-behaviours.js`),
+  so the policy has no nonce and no `'unsafe-inline'` for scripts; add a nonce only if one is ever needed.
+- **`/health` says only ok or unavailable** (200 / 503) and lives OUTSIDE the web group (no session, cookie,
+  CSRF or database-backed throttle), so a down database-backed session or cache cannot break it; its own
+  limiter uses `HEALTH_LIMITER_STORE`, and an unexpected failure is rendered as the same 503 by the exception
+  handler. No diagnostics page; use `bizflow:preflight` and logs.
+- **A password change signs out the account's other sessions** through `AuthenticateSession` (web group)
+  plus the `Login` listener that records the password hash at sign-in. Do not remove either. The
+  middleware is `RequirePasswordFingerprint`, which FAILS CLOSED: a signed-in session with no hash is
+  logged out, never given one (so sessions from before the protection end once, at deploy). Tests sign
+  in through `actingAs()`, which seeds the hash (see `Tests\TestCase::be()`). The single-use reset is
+  proven on MySQL by `tests/Mysql/PasswordResetMysqlTest.php` (CI only; never run locally).
+- **Every mail transport is wrapped** by `GuardedMailManager` / `DemoGuardTransport`, so demo mode stops
+  delivery on any mailer, default or named. `SecurityHeaders` is the OUTERMOST global middleware so early
+  refusals (413, maintenance) carry the headers.
+- **Proxy lists are validated** (`App\Support\TrustedProxies`): wildcards, `REMOTE_ADDR`, `/0` and other
+  trust-everyone spellings are dropped and reported, never trusted.
+- **Audit the whole npm graph** (`npm audit`, not `--omit=dev`): axios is a devDependency in the bundle.
+- **Do not seed demo accounts, add a reset job, or enable email transport** without an approved design.
+- Run `php artisan bizflow:preflight` against `.env.demo.example` / `.env.production.example` rules
+  (`tests/Feature/Security/PreflightTest.php` keeps the examples valid).
 ## Scheduled work
 
 - Scheduled commands are system tasks: they have no current user or request, never use
@@ -164,8 +212,12 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
 
 ## Queued work
 
-- Use Laravel's database queue; no Redis/Horizon. Jobs carry only IDs, re-read and re-check state
+- Use Laravel's database queue; no Redis/Horizon. Business jobs carry only IDs, re-read and re-check state
   when they run, and implement `ShouldQueueAfterCommit` when dispatched inside a transaction.
+  The exception is the account emails (`QueuedResetPassword`, `QueuedVerifyEmail`): a notification
+  carries its notifiable and its bearer token or signed link, so they implement `ShouldBeEncrypted` and
+  the `jobs` / `failed_jobs` payload is an encrypted envelope. Anything else that has to carry a secret
+  must do the same.
 - A job that needs an entitlement (invoice email) re-checks it when it claims its row and, if it
   has been lost, fails the row for good rather than retrying.
 - Every side effect has a tracking row whose state changes are conditional updates

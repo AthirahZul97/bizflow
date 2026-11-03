@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Rules\PasswordFitsBcrypt;
 use Illuminate\Foundation\Http\FormRequest;
 
 class RegisterRequest extends FormRequest
@@ -17,8 +18,8 @@ class RegisterRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * Passwords are limited to 72 characters to stay close to bcrypt's input limit. Note that bcrypt
-     * only uses the first 72 bytes, so multibyte characters can reach that limit before 72 characters.
+     * Passwords are limited to 72 characters and, because bcrypt only uses the first 72 BYTES, to 72
+     * bytes (PasswordFitsBcrypt), so multibyte characters cannot slip past the limit.
      *
      * @return array<string, mixed>
      */
@@ -28,7 +29,7 @@ class RegisterRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'business_name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'confirmed', 'min:8', 'max:72'],
+            'password' => ['required', 'string', 'confirmed', 'min:8', 'max:72', new PasswordFitsBcrypt],
         ];
     }
 

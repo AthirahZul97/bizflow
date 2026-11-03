@@ -1,0 +1,46 @@
+name: Dependency audit
+
+# A weekly check of the committed lock files against published advisories. CI audits only when a
+# pull request runs, so an advisory published in between would otherwise wait for the next PR.
+# Read-only: it installs nothing, changes nothing and needs no secrets.
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  composer:
+    name: Composer audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+
+      - name: Composer audit
+        run: composer audit --locked
+
+  npm:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The whole graph, devDependencies included (build tools and bundled libraries such as axios),
+      # for the same reason as in ci.yml. A failure is meant to be seen.
+      - name: npm audit
+        run: npm audit

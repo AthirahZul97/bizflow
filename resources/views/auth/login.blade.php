@@ -44,7 +44,12 @@
             </div>
 
             <p class="text-center text-body-secondary small mt-3">
-                No account yet? <a href="{{ route('register') }}">Register</a>
+                @if (\App\Support\DemoMode::emailFlowsEnabled())
+                    <a href="{{ route('password.request') }}">Forgot your password?</a><br>
+                @endif
+                @if (\App\Support\DemoMode::registrationOpen())
+                    No account yet? <a href="{{ route('register') }}">Register</a>
+                @endif
             </p>
         </div>
     </div>

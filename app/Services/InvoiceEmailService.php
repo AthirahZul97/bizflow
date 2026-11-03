@@ -13,6 +13,7 @@ use App\Models\Business;
 use App\Models\Invoice;
 use App\Models\InvoiceEmail;
 use App\Models\User;
+use App\Support\DemoMode;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
@@ -83,6 +84,18 @@ class InvoiceEmailService
     public function queue(Business $business, Invoice $invoice, ?User $requester, string $source): InvoiceEmail
     {
         $this->ensureBelongsTo($invoice, $business);
+
+        // Before anything is written: a deployment that does not send email (the demo) creates no
+        // history row and queues no job. claim() and the delivery guard back this up.
+        if (! DemoMode::invoiceEmailAllowed()) {
+            throw new InvoiceEmailException(DemoMode::invoiceEmailRefusal());
+        }
+
+        // A private beta can require a verified address before an account can email customers.
+        // `null` is a system request (no person), which has no address to verify.
+        if (config('bizflow.require_verified_email') && $requester !== null && ! $requester->hasVerifiedEmail()) {
+            throw new InvoiceEmailException('Verify your email address before sending invoices.');
+        }
 
         $email = DB::transaction(function () use ($business, $invoice, $requester, $source) {
             // Serializes every send request for this invoice.
@@ -159,6 +172,14 @@ class InvoiceEmailService
             }
 
             if ($email->status !== InvoiceEmailStatus::Queued) {
+                return null;
+            }
+
+            // A row queued before the deployment stopped sending email (or one that slipped past
+            // queue()) must not be sent now: end it for good, so no retry can deliver it later.
+            if (! DemoMode::invoiceEmailAllowed()) {
+                $this->finish($email, InvoiceEmailStatus::Skipped, 'Not sent: '.DemoMode::invoiceEmailRefusal());
+
                 return null;
             }
 

@@ -1,2 +1,4 @@
+# Asks well-behaved crawlers to stay away. This is a request, not access control: the application's
+# own authentication protects everything. The demo also sends "X-Robots-Tag: noindex, nofollow".
 User-agent: *
-Disallow:
+Disallow: /

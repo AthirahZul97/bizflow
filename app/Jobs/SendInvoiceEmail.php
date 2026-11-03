@@ -63,7 +63,16 @@ class SendInvoiceEmail implements ShouldQueue, ShouldQueueAfterCommit
             throw $e;
         }
 
-        $emails->markSent($email, $sent?->getMessageId());
+        // send() returns null when something cancelled the message before any transport saw it
+        // (the delivery guard). Nothing was delivered, so it is never recorded as sent, and it is
+        // not retried either: the guard would refuse it again.
+        if ($sent === null) {
+            $emails->markFailed($email->getKey(), 'Not sent: email delivery is turned off in this environment.');
+
+            return;
+        }
+
+        $emails->markSent($email, $sent->getMessageId());
     }
 
     /**

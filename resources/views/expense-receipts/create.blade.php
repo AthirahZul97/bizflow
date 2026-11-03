@@ -14,7 +14,7 @@
             <div class="card shadow-sm">
                 <div class="card-body p-4">
                     <form method="POST" action="{{ route('expense-receipts.store') }}" enctype="multipart/form-data" novalidate
-                          onsubmit="this.querySelector('[type=submit]').disabled = true">
+                          data-disable-on-submit>
                         @csrf
 
                         <div class="mb-3">

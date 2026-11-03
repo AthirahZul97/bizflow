@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\Auth\EmailVerificationController;
+use App\Http\Controllers\Auth\NewPasswordController;
+use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BusinessProfileController;
@@ -9,7 +12,6 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\ExpenseReceiptController;
 use App\Http\Controllers\ExpenseReceiptFileController;
-use App\Http\Controllers\HealthCheckController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\InvoiceEmailController;
 use App\Http\Controllers\InvoicePdfController;
@@ -24,14 +26,23 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-Route::get('/health', HealthCheckController::class)->name('health');
-
 Route::middleware('guest')->group(function () {
-    Route::get('/register', [RegisteredUserController::class, 'create'])->name('register');
-    Route::post('/register', [RegisteredUserController::class, 'store'])->middleware('throttle:6,1');
+    // Self-service registration exists only where the deployment opens it (404 otherwise).
+    Route::middleware('registration.open')->group(function () {
+        Route::get('/register', [RegisteredUserController::class, 'create'])->name('register');
+        Route::post('/register', [RegisteredUserController::class, 'store'])->middleware('throttle:6,1');
+    });
 
     Route::get('/login', [AuthenticatedSessionController::class, 'create'])->name('login');
-    Route::post('/login', [AuthenticatedSessionController::class, 'store']);
+    Route::post('/login', [AuthenticatedSessionController::class, 'store'])->middleware('throttle:login-ip');
+
+    // Password reset works by email, so it is off (404) where email is off.
+    Route::middleware('email.flows')->group(function () {
+        Route::get('/forgot-password', [PasswordResetLinkController::class, 'create'])->name('password.request');
+        Route::post('/forgot-password', [PasswordResetLinkController::class, 'store'])->middleware('throttle:6,1,password-email')->name('password.email');
+        Route::get('/reset-password/{token}', [NewPasswordController::class, 'create'])->name('password.reset');
+        Route::post('/reset-password', [NewPasswordController::class, 'store'])->middleware('throttle:6,1,password-reset')->name('password.store');
+    });
 });
 
 Route::middleware('auth')->group(function () {
@@ -55,9 +66,11 @@ Route::middleware('auth')->group(function () {
         Route::get('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'confirmCancel'])->name('invoices.cancel.confirm');
         Route::post('/invoices/{invoice}/cancel', [InvoiceStatusController::class, 'cancel'])->name('invoices.cancel');
         Route::get('/invoices/{invoice}/pdf', InvoicePdfController::class)->name('invoices.pdf');
-        Route::get('/invoices/{invoice}/email', [InvoiceEmailController::class, 'create'])->name('invoices.email.create');
+        Route::get('/invoices/{invoice}/email', [InvoiceEmailController::class, 'create'])
+            ->middleware('verified.required')
+            ->name('invoices.email.create');
         Route::post('/invoices/{invoice}/email', [InvoiceEmailController::class, 'store'])
-            ->middleware('throttle:6,1')
+            ->middleware(['verified.required', 'throttle:6,1'])
             ->name('invoices.email.store');
 
         Route::get('/recurring-invoices/{recurring_invoice}/delete', [RecurringInvoiceController::class, 'delete'])->name('recurring-invoices.delete');
@@ -104,14 +117,26 @@ Route::middleware('auth')->group(function () {
         Route::prefix('billing')->name('billing.')->controller(BillingController::class)->group(function () {
             Route::get('/', 'show')->name('show');
             Route::get('/plans', 'plans')->name('plans');
-            Route::post('/plan', 'change')->name('change');
+            Route::post('/plan', 'change')->middleware('throttle:10,1,billing')->name('change');
             Route::get('/cancel', 'confirmCancel')->name('cancel.confirm');
-            Route::post('/cancel', 'cancel')->name('cancel');
-            Route::post('/resume', 'resume')->name('resume');
+            Route::post('/cancel', 'cancel')->middleware('throttle:10,1,billing')->name('cancel');
+            Route::post('/resume', 'resume')->middleware('throttle:10,1,billing')->name('resume');
         });
 
         Route::get('/business/profile', [BusinessProfileController::class, 'edit'])->name('business.profile.edit');
-        Route::put('/business/profile', [BusinessProfileController::class, 'update'])->name('business.profile.update');
+        Route::put('/business/profile', [BusinessProfileController::class, 'update'])->middleware('throttle:30,1,profile')->name('business.profile.update');
+    });
+
+    // Email verification belongs to the account, not to a business, so it sits outside the business
+    // group (an account without a business can still verify). Off (404) where email is off.
+    Route::middleware('email.flows')->group(function () {
+        Route::get('/verify-email', [EmailVerificationController::class, 'notice'])->name('verification.notice');
+        Route::get('/verify-email/{id}/{hash}', [EmailVerificationController::class, 'verify'])
+            ->middleware(['signed', 'throttle:6,1,verification'])
+            ->name('verification.verify');
+        Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
+            ->middleware('throttle:6,1,verification')
+            ->name('verification.send');
     });
 
     // Outside the business group so an account without a business can still log out.

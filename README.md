@@ -19,7 +19,7 @@ and only ever sees and changes that business's data.
 | Component | Version verified | Notes |
 |---|---|---|
 | Laravel | 12 | |
-| PHP | **8.4.26** | `composer.json` allows `php ^8.2`; only 8.4.26 has been tested. |
+| PHP | **8.4.26** | `composer.json` requires `php ^8.4.1` (the locked Symfony 8 packages need it); 8.4.26 is what has been tested. |
 | MySQL | **8.0.46** | Application database. |
 | Bootstrap | 5.3 | Bundled with Vite; no other UI or chart library. |
 | Node.js / npm | **24.18.1 / 11.16.0** | Only needed to build the front-end assets. |
@@ -402,7 +402,7 @@ never renumbered, and issuing re-checks that the invoice is still a draft under 
 
 ## Setup
 
-These steps assume PHP 8.4 with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `openssl` and
+These steps assume PHP 8.4.1 or newer with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `openssl` and
 `fileinfo` extensions, Composer 2, Node.js with npm, and MySQL 8.
 
 1. **Clone the repository**
@@ -447,7 +447,7 @@ These steps assume PHP 8.4 with the `pdo_mysql`, `pdo_sqlite`, `mbstring`, `open
     php artisan serve
     ```
     Open http://127.0.0.1:8000 and register an account.
-    `/health` shows an application and database status page (`200` healthy, `503` if the database is unreachable).
+    `/health` answers `{"status":"ok"}` (`200`) or `{"status":"unavailable"}` (`503` if the database is unreachable) and nothing else: no versions, environment or database details.
 11. **Run the queue worker** (needed for invoice emails; leave it running in its own terminal)
     ```bash
     php artisan queue:work --tries=3 --timeout=60
@@ -485,7 +485,37 @@ If `php` on your PATH is not PHP 8.4, call the PHP 8.4 binary directly. For exam
 Windows machine this project was developed on: `C:\php84\php.exe artisan test`. That path is a
 local example, not a requirement.
 
+### Security baseline and demo mode (Phase 2F-2)
+- **Demo mode** (`BIZFLOW_DEMO_MODE=true`) is for a public portfolio demo and only ever takes things
+  away: registration is closed, no invoice email is queued, claimed or delivered, password reset and
+  email verification are off, and receipts use the labelled demo placeholder. It comes from
+  configuration, never from a request. Demo account provisioning, isolation checks, cleanup and a safe
+  reset are **mandatory gates before the demo is public** and are not built yet (see the deployment guide).
+- **Preflight:** `php artisan bizflow:preflight` is a read-only deployment check that prints no
+  configuration values.
+- **Proxies and headers:** no proxy is trusted unless listed in `TRUSTED_PROXIES`; responses carry
+  nosniff, frame denial, referrer and permissions policies, HSTS on verified HTTPS only, and a
+  **report-only** Content-Security-Policy (nothing is enforced yet).
+- **Account email:** native password reset and email verification exist but are switched off in demo
+  mode. `BIZFLOW_REQUIRE_VERIFIED_EMAIL=true` (a future private beta with a real mailer) makes an
+  unverified account unable to send invoice emails. Registration still tells a visitor whether an
+  email address is taken (an accepted trade-off while it is rate limited).
+- **Limits:** login is limited per email and IP and also per IP (20 a minute); registration,
+  password reset, verification, invoice email, receipt and billing writes have their own limits.
+- **Housekeeping:** `queue:prune-failed` runs daily; CI and a weekly workflow audit Composer and the
+  **whole** npm graph (`npm audit`, build tools and bundled libraries included, so an advisory fails the
+  job and stays visible); Dependabot is limited to grouped weekly minor/patch PRs.
+- **Sessions and mail:** a password reset signs out the account's other sessions on every session driver,
+  and a signed-in session without a password fingerprint (one from before this) is logged out, not trusted;
+  every mail transport (not only the default) is guarded in demo mode; the reset and verification emails
+  are queued with an encrypted payload; `/health` runs outside the session and cache stack.
+
 ### Production notes
+See [docs/deployment.md](docs/deployment.md) for the full deployment guide (PHP-FPM, HTTPS and
+proxies, queue worker and scheduler, database privileges, backups, rollback and the demo mode gates).
+Start from `.env.demo.example` or `.env.production.example` and run `php artisan bizflow:preflight`
+before every deploy.
+
 For a real deployment, set at least `APP_ENV=production`, `APP_DEBUG=false`, the correct
 `APP_URL`, and `SESSION_SECURE_COOKIE=true` when serving over HTTPS.
 
