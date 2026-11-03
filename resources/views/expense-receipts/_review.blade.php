@@ -62,7 +62,7 @@
                 <p class="text-body-secondary small">Every field can be changed. No expense exists until you confirm.</p>
 
                 <form method="POST" action="{{ route('expense-receipts.confirm', $receipt) }}" novalidate
-                      onsubmit="this.querySelector('[type=submit]').disabled = true">
+                      data-disable-on-submit>
                     @include('expenses._form')
 
                     <div class="sticky-bottom bg-body border-top py-2 d-grid d-sm-flex gap-2">
@@ -75,7 +75,7 @@
         <div class="d-grid d-sm-flex gap-2 mt-3">
             @if (! $receipt->isManual() || $receipt->extracted_at !== null)
                 <form method="POST" action="{{ route('expense-receipts.retry', $receipt) }}"
-                      onsubmit="return confirm('Read the receipt again? Your edits on this page will be lost.')">
+                      data-confirm="Read the receipt again? Your edits on this page will be lost.">
                     @csrf
                     <button type="submit" class="btn btn-outline-secondary w-100">Retry reading</button>
                 </form>

@@ -68,6 +68,10 @@ jobs:
       - name: Composer audit
         run: composer audit --locked
 
+      # The lock must be installable on the PHP this job runs (composer.json pins ^8.4.1).
+      - name: Platform requirements
+        run: composer check-platform-reqs --lock
+
   frontend:
     name: Frontend (build)
     runs-on: ubuntu-latest
@@ -84,7 +88,11 @@ jobs:
 
       - run: npm run build
 
-      - run: npm audit --omit=dev
+      # The whole graph, devDependencies included: this application ships no node_modules, but
+      # everything in package.json is part of the build (vite, its plugins) or is bundled into the
+      # shipped assets (axios is a devDependency and is in the JavaScript bundle). A failure here is
+      # meant to be seen; it is not suppressed or ignored.
+      - run: npm audit
 
   mysql:
     name: MySQL (tests/Mysql)

@@ -23,3 +23,9 @@ Schedule::command('receipts:recover')->everyMinute()->withoutOverlapping(10);
 // Discards receipts nobody confirmed within the retention period and deletes their files.
 // Idempotent (conditional updates under row locks), so repeats and overlaps are harmless.
 Schedule::command('receipts:prune')->dailyAt('03:15')->withoutOverlapping();
+
+// Keeps the failed_jobs log from growing for ever. It deletes only rows of that framework table
+// (a log of failed queue payloads: IDs for the business jobs, and for the account-email notifications
+// an encrypted payload) and never touches a business record; every side effect has its own tracking
+// row, so nothing depends on these.
+Schedule::command('queue:prune-failed --hours=168')->dailyAt('03:30')->withoutOverlapping();

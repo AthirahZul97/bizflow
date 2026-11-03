@@ -47,16 +47,15 @@
                             </li>
                         @endif
                     @endauth
-                    <li class="nav-item">
-                        <a class="nav-link @if (request()->routeIs('health')) active @endif" href="{{ route('health') }}">System status</a>
-                    </li>
                     @guest
                         <li class="nav-item">
                             <a class="nav-link @if (request()->routeIs('login')) active @endif" href="{{ route('login') }}">Log in</a>
                         </li>
-                        <li class="nav-item">
-                            <a class="nav-link @if (request()->routeIs('register')) active @endif" href="{{ route('register') }}">Register</a>
-                        </li>
+                        @if (\App\Support\DemoMode::registrationOpen())
+                            <li class="nav-item">
+                                <a class="nav-link @if (request()->routeIs('register')) active @endif" href="{{ route('register') }}">Register</a>
+                            </li>
+                        @endif
                     @endguest
                     @auth
                         <li class="nav-item dropdown">
@@ -81,6 +80,8 @@
             </div>
         </div>
     </nav>
+
+    @include('partials._demo-banner')
 
     <main class="flex-grow-1 py-4">
         <div class="container">

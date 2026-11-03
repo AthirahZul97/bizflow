@@ -27,6 +27,8 @@ use App\Services\ExpenseReceiptService;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -186,6 +188,29 @@ try {
             $normalized = (new ReceiptExtractionNormalizer)->normalize(ScriptedOcrProvider::extraction());
 
             return app(ExpenseReceiptService::class)->markExtracted($receipt, $normalized) ? 'extracted' : 'ignored';
+        })(),
+        'reset_password' => (function () use ($args, $app) {
+            // A password-reset submission as the real HTTP request it is: through the kernel, the web
+            // middleware and the form request into NewPasswordController. (CSRF is skipped because this
+            // process runs with APP_ENV=testing in the console, as in any feature test.) The outcome is
+            // read from where the response sends the browser: /login when the password was reset, back
+            // to the reset form when the link was refused.
+            $request = Request::create('http://localhost/reset-password', 'POST', [
+                'token' => $args['token'],
+                'email' => $args['email'],
+                'password' => $args['password'],
+                'password_confirmation' => $args['password'],
+            ]);
+            $request->headers->set('Referer', 'http://localhost/reset-password/'.$args['token']);
+
+            $response = $app->make(HttpKernel::class)->handle($request);
+            $location = (string) $response->headers->get('Location');
+
+            return match (true) {
+                $response->getStatusCode() === 302 && str_ends_with($location, '/login') => 'reset',
+                $response->getStatusCode() === 302 && str_contains($location, '/reset-password/') => 'rejected',
+                default => 'unexpected:'.$response->getStatusCode().' '.$location,
+            };
         })(),
         default => throw new InvalidArgumentException('unknown action'),
     };

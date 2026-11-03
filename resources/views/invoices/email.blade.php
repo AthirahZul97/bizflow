@@ -24,7 +24,12 @@
 
             <div class="card shadow-sm">
                 <div class="card-body p-4">
-                    @if ($options['invoice'] === null && $options['customer'] === null)
+                    @if (! \App\Support\DemoMode::invoiceEmailAllowed())
+                        <p class="mb-0" data-email-disabled>
+                            {{ \App\Support\DemoMode::invoiceEmailRefusal() }}
+                            <a href="{{ route('invoices.pdf', $invoice) }}">Download the PDF</a>.
+                        </p>
+                    @elseif ($options['invoice'] === null && $options['customer'] === null)
                         <p class="mb-0" data-no-recipient>
                             Neither this invoice nor the customer has an email address.
                             Add one to the customer, then send the invoice to the customer’s current email.

@@ -6,13 +6,14 @@
         <p class="lead text-body-secondary mb-4">Simple business management for small businesses.</p>
         <div class="d-flex flex-wrap justify-content-center gap-2">
             @guest
-                <a href="{{ route('register') }}" class="btn btn-primary">Create an account</a>
-                <a href="{{ route('login') }}" class="btn btn-outline-secondary">Log in</a>
+                @if (\App\Support\DemoMode::registrationOpen())
+                    <a href="{{ route('register') }}" class="btn btn-primary">Create an account</a>
+                @endif
+                <a href="{{ route('login') }}" class="btn {{ \App\Support\DemoMode::registrationOpen() ? 'btn-outline-secondary' : 'btn-primary' }}">Log in</a>
             @endguest
             @auth
                 <a href="{{ route('dashboard') }}" class="btn btn-primary">Go to dashboard</a>
             @endauth
-            <a href="{{ route('health') }}" class="btn btn-outline-primary">Check system status</a>
         </div>
     </div>
 @endsection
