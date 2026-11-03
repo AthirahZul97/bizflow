@@ -120,7 +120,10 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   charges are deferred; the SST decision must be made before the first paying customer. Placeholder
   prices and limits (the Trial and Free plans, `PlanSeeder`) are not approved commercial terms.
 - Run the commercial tests with `php artisan test tests/Feature/Billing tests/Unit/Billing`; the
-  MySQL concurrency tests in `tests/Mysql` are opt-in (`BIZFLOW_MYSQL_SCRATCH`, a scratch database).
+  MySQL concurrency tests in `tests/Mysql` are opt-in: locally they need the five dedicated
+  `BIZFLOW_MYSQL_SCRATCH*` process variables for a scratch instance on 127.0.0.1:3308 (never in
+  `.env`, never the app's `DB_*`; see README "Testing" and `tests/Mysql/ScratchTarget.php`); CI
+  runs them against its own container. Do not loosen those rules.
 
 ## Receipt OCR (Phase 2E)
 
@@ -138,6 +141,16 @@ Planned modules: Authentication, Customers, Products / Services, Invoices, Expen
   `MonthlyReceiptOcrMeter` from `expense_receipts.counted_at`. A unit is taken at upload (and when
   retrying a failed receipt) under the business row lock, and released by a technical failure or a
   discard before extraction. Confirming uses none.
+- **Recovery** (`receipts:recover`, `ExpenseReceiptService::recoverStuck()`): a claim is the
+  receipt's `attempts` plus the `processing_started_at` it wrote; every worker write requires
+  both to match, and recovery revokes a stale owner by clearing the start in the same conditional
+  update that takes the right to dispatch. Only `claim()` increments `attempts`. The sweep is the
+  one deliberately global read (a system maintenance exception: it finds rows by state, reads no
+  receipt contents) and every write it makes is pinned to the row's `id` and `business_id`.
+  Laravel gives `failed()` a fresh job instance, so that hook never knows its claim: it may only
+  end a receipt that has used all its attempts and is not being run; a job holding a claim on its
+  last delivery ends the receipt itself. Entitlement lost at claim time fails the receipt for
+  good and releases its unit (deliberate; do not change to skip-and-retry).
 
 ## Scheduled work
 

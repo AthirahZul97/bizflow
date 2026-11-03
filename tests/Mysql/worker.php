@@ -17,24 +17,55 @@ use App\Enums\Entitlement;
 use App\Exceptions\EntitlementException;
 use App\Exceptions\SubscriptionException;
 use App\Models\Business;
+use App\Models\ExpenseReceipt;
 use App\Models\Invoice;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Ocr\ReceiptExtractionNormalizer;
 use App\Services\ExpenseReceiptService;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Tests\Mysql\ScratchTarget;
+use Tests\Support\ScriptedOcrProvider;
 
 require __DIR__.'/../../vendor/autoload.php';
 
 $app = require __DIR__.'/../../bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 
-$database = getenv('DB_DATABASE') ?: '';
+// The parent passes the validated target explicitly. Validate it again here, before connecting,
+// and ask the server what it actually reached; nothing runs if either check fails. Messages never
+// contain credentials.
+try {
+    $target = ScratchTarget::fromEnvironment(ScratchTarget::processEnvironment());
+
+    if ($target === null) {
+        throw new InvalidArgumentException('no scratch target was passed to the worker');
+    }
+
+    config([
+        'database.default' => 'mysql',
+        'database.connections.mysql' => array_merge(config('database.connections.mysql'), $target->connectionConfig()),
+    ]);
+    DB::purge('mysql');
+
+    $server = DB::connection('mysql')->selectOne('select database() as name, @@port as port');
+    $target->assertServerIdentity($server->name ?? null, $server->port ?? null);
+} catch (InvalidArgumentException $e) {
+    echo json_encode(['status' => 'error', 'message' => 'refusing to run: '.$e->getMessage()]);
+    exit(1);
+} catch (Throwable $e) {
+    echo json_encode(['status' => 'error', 'message' => 'refusing to run: the scratch target could not be verified ('.$e::class.')']);
+    exit(1);
+}
+
+$database = $target->database;
 
 // Belt and braces: this process must only ever talk to a scratch database.
 if (! str_contains($database, 'scratch') || DB::connection()->getDatabaseName() !== $database) {
@@ -126,6 +157,35 @@ try {
             ]);
 
             return 'inserted';
+        })(),
+        'recover_receipts' => (function () {
+            // The sweeper (receipts:recover) as its own process; the dispatched jobs are discarded,
+            // so only its database work runs. The outcome is "recovered:<redispatched>:<failed>:<errors>".
+            config(['queue.default' => 'null']);
+
+            $result = app(ExpenseReceiptService::class)->recoverStuck();
+
+            return "recovered:{$result['redispatched']}:{$result['failed']}:{$result['dispatch_errors']}";
+        })(),
+        'claim_receipt' => (function () use ($args) {
+            // A worker's claim() under the receipt's row lock; no provider is called.
+            $claimed = app(ExpenseReceiptService::class)->claim((int) $args['receipt_id']);
+
+            return $claimed === null ? 'not_claimed' : "claimed:{$claimed->attempts}";
+        })(),
+        'extract_receipt' => (function () use ($args) {
+            // A worker that claimed earlier (the attempts and start the test passes, as claim()
+            // returned them) and now saves its result, possibly after a sweep revoked the claim.
+            $receipt = new ExpenseReceipt;
+            $receipt->forceFill([
+                'id' => (int) $args['receipt_id'],
+                'attempts' => (int) $args['attempts'],
+                'processing_started_at' => Carbon::parse($args['processing_started_at']),
+            ]);
+
+            $normalized = (new ReceiptExtractionNormalizer)->normalize(ScriptedOcrProvider::extraction());
+
+            return app(ExpenseReceiptService::class)->markExtracted($receipt, $normalized) ? 'extracted' : 'ignored';
         })(),
         default => throw new InvalidArgumentException('unknown action'),
     };

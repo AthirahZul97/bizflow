@@ -158,6 +158,32 @@ run, drafts only, never issued or emailed automatically).
   Free 0, development paid plans 100.
 - Receipts nobody confirms are discarded, and their files deleted, after 30 days
   (`php artisan receipts:prune`, scheduled daily). Confirmed receipts keep their file.
+- **Recovery of stuck receipts** (`php artisan receipts:recover`, scheduled every minute). A
+  worker that dies mid-read, or a lost job, would otherwise leave a receipt in `queued` or
+  `processing` for good. The sweeper re-dispatches a receipt that has been idle for
+  `ocr.redispatch_after_seconds` (a `queued` one, or a `processing` one whose claim is older than
+  `ocr.stale_processing_seconds`). A dispatch is not a provider attempt: only a worker's claim
+  counts toward `ocr.max_attempts`, so recovery never reads a receipt more often than the cap.
+  - **Retry and quota.** A receipt keeps its unit of the monthly allowance while it is recovered
+    and retried. The unit is released exactly once, only when the receipt ends in `failed`
+    (attempts used up, entitlement lost, or the last queue delivery failing) or is discarded
+    before extraction; the file is kept so the details can be typed in by hand.
+  - **Entitlement lost.** If the plan no longer includes receipt scanning (a lapse, a downgrade,
+    read-only access) by the time a receipt is claimed, it is failed for good and its unit is
+    released, not skipped and retried: a later retry would run on a plan that does not allow it.
+  - **The sweep is global, on purpose.** It is the one system-level maintenance exception to
+    "every query starts from the business": a stuck receipt is found by its state, not by its
+    tenant, and walking every business each minute would cost far more than it protects. It
+    reads identifiers and state only, never receipt contents, and calls no provider. Every write
+    it makes is pinned to the candidate's own `id` **and** `business_id`, the dispatched job
+    carries only the id and re-reads the business from the row, and quota is counted per
+    business, so no receipt can be changed, dispatched or accounted under another business.
+  - **Obsolete jobs cannot undo newer work.** A worker's result is saved only while its claim
+    (attempt number and start time) still matches the row; the sweeper revokes a dead worker's
+    claim in the same update that takes the right to dispatch. The queue's `failed()` hook cannot
+    tell which dispatch it belongs to, so it only ends a receipt that has used all its attempts
+    and that nobody is running; a job that holds a claim on its last delivery ends the receipt
+    itself, under that claim.
 
 ### Dashboard
 For a selected period (this month by default, last month, this year or a custom range):
@@ -369,10 +395,10 @@ never renumbered, and issuing re-checks that the invoice is still a draft under 
   separately against MySQL 8.0.46, inside transactions that were rolled back.
 - Browser smoke tests on a throwaway SQLite database covered the main flows, mobile width and printing.
 - The default automated suite (`php artisan test`) does **not** run against MySQL. The commercial
-  layer's concurrency and MySQL-specific tests (`tests/Mysql`) are skipped locally unless
-  `BIZFLOW_MYSQL_SCRATCH` names a scratch database, but GitHub Actions runs them automatically in
-  the "MySQL (tests/Mysql)" job against a throwaway MySQL 8.0 container (see "Phase 2D verification
-  status").
+  layer's concurrency and MySQL-specific tests (`tests/Mysql`) are skipped locally unless the
+  dedicated scratch target variables are set (see "Testing"), but GitHub Actions runs them
+  automatically in the "MySQL (tests/Mysql)" job against a throwaway MySQL 8.0 container (see
+  "Phase 2D verification status").
 
 ## Setup
 
@@ -472,7 +498,8 @@ detected when the job is retried after `DB_QUEUE_RETRY_AFTER` (90 seconds).
 Receipt scanning reuses the queue worker. PHP's `upload_max_filesize` and `post_max_size` must be
 at least `ocr.max_upload_kb` (8 MB by default); PHP's own default of 2 MB rejects larger phone
 photos before BizFlow sees them. `OCR_DRIVER` is `fake` (demo data) or `none` (scanning off). The
-`receipts:prune` command runs from the same scheduler.
+`receipts:prune` and `receipts:recover` commands run from the same scheduler; without it a
+receipt whose worker died stays in `processing` until the scheduler runs again.
 
 Recurring invoices need the scheduler: run `php artisan schedule:run` every minute from cron (or
 Windows Task Scheduler). If it stops, nothing is lost: missed invoices are generated, oldest first,
@@ -494,9 +521,29 @@ php artisan test tests/Feature/Billing tests/Unit/Billing
 
 Concurrency and MySQL-specific behaviour of the commercial layer (the unique `NULL` key, foreign
 keys, two requests racing at a limit, concurrent plan changes) is in `tests/Mysql`. Those tests
-are **skipped** locally unless `BIZFLOW_MYSQL_SCRATCH` names a scratch database (its name must
-contain `scratch`, and it is rebuilt with `migrate:fresh`); they never run against the `bizflow`
-database. GitHub Actions runs them automatically in its own MySQL 8.0 service container.
+are **skipped** locally unless the dedicated scratch target is set in the process environment
+(never in `.env`); the scratch database is rebuilt with `migrate:fresh`, and the tests never run
+against the `bizflow` database. GitHub Actions runs them automatically in its own MySQL 8.0
+service container.
+
+Local runs need **all five** variables, and the connection is built only from them (the
+application's `DB_*` are never used):
+
+| Variable | Local value |
+|---|---|
+| `BIZFLOW_MYSQL_SCRATCH` | `bizflow_stage18_scratch` or `bizflow_phase2d_scratch` |
+| `BIZFLOW_MYSQL_SCRATCH_HOST` | `127.0.0.1` exactly (`localhost` is refused: it can select a Unix socket and ignore the port) |
+| `BIZFLOW_MYSQL_SCRATCH_PORT` | `3308` (a dedicated scratch instance; never 3306, 3307 or 3323) |
+| `BIZFLOW_MYSQL_SCRATCH_USERNAME` / `_PASSWORD` | an account with privileges on the scratch schema only |
+
+GitHub Actions uses `bizflow_ci_scratch` on port 3306 (its service container) and is recognised
+only when the full set of GitHub runner variables (`GITHUB_ACTIONS=true`, `GITHUB_RUN_ID`,
+`GITHUB_WORKFLOW`, `GITHUB_EVENT_NAME`, `GITHUB_REPOSITORY`, `GITHUB_WORKSPACE`, `RUNNER_TEMP`,
+`RUNNER_OS=Linux`) is present and consistent **and** PHP itself is running on Linux; setting
+`GITHUB_ACTIONS` (or any runner variable) in a local shell does not enable it and is refused. The
+rules live in `tests/Mysql/ScratchTarget.php` and are covered by offline tests (`tests/Unit/Mysql/ScratchTargetTest.php`). They check the target
+before connecting and the connected database name and `@@port` afterwards; this catches mistakes
+but does **not** prove the server is isolated. That depends on how the instance is provisioned.
 
 `php artisan test` never touches the MySQL database. Because SQLite and MySQL differ in
 `DECIMAL` handling, foreign-key enforcement, query planning and SQL modes such as
@@ -537,9 +584,12 @@ unavailable due to current MySQL account privileges.
   customer/product/invoice limits, concurrent plan changes, lock ordering and deadlocks, and
   one-trial-ever under concurrency. They have since been added to CI (next section); the local
   Stage 18 rehearsal itself has **not** been done.
-- **To resume:** an authorized MySQL administrator creates `bizflow_phase2d_scratch`
-  (utf8mb4) and grants `bizflow_user` privileges on that database only. Then run
-  `BIZFLOW_MYSQL_SCRATCH=bizflow_phase2d_scratch php artisan test tests/Mysql`.
+- **To resume:** an authorized administrator provisions a dedicated scratch MySQL instance on
+  `127.0.0.1:3308` (its own data directory; the work MySQL on 3306 and the XeerSoft services are
+  not touched), creates the scratch database (utf8mb4, e.g. `bizflow_stage18_scratch`) and an
+  account with privileges on that schema only. Then set the five `BIZFLOW_MYSQL_SCRATCH*`
+  variables (see "Testing") in the shell session and run `php artisan test tests/Mysql`. Stage 18
+  counts as passed only if every test runs and passes with none skipped.
 
 **MySQL tests in GitHub Actions.** The "MySQL (tests/Mysql)" job in `.github/workflows/ci.yml`
 runs `tests/Mysql` automatically on pull requests and on pushes to `main`, against a throwaway
