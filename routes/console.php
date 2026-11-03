@@ -14,6 +14,12 @@ Artisan::command('inspire', function () {
 // wasted work.
 Schedule::command('invoices:generate-recurring')->hourlyAt(5)->withoutOverlapping();
 
+// Re-dispatches OCR work nobody is doing (a worker that died mid-read, a lost job) and fails
+// receipts that have used all their attempts. Idempotent: it takes the right to dispatch with a
+// conditional update and claim() decides, so repeats and overlaps are harmless. The overlap
+// lock expires after 10 minutes so a crashed run cannot block recovery for the default day.
+Schedule::command('receipts:recover')->everyMinute()->withoutOverlapping(10);
+
 // Discards receipts nobody confirmed within the retention period and deletes their files.
 // Idempotent (conditional updates under row locks), so repeats and overlaps are harmless.
 Schedule::command('receipts:prune')->dailyAt('03:15')->withoutOverlapping();

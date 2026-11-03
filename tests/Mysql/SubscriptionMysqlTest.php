@@ -332,12 +332,12 @@ class SubscriptionMysqlTest extends MysqlTestCase
         $businessA = $this->businessOf($a);
         $businessB = $this->businessOf($b);
 
-        $outcomes = $this->raceBehindBusinessLock($businessA->getKey(), [
+        // A's lock is held until B's worker has finished: completing proves it did not wait.
+        $outcome = $this->runBesideBusinessLock($businessA->getKey(),
             ['action' => 'create_customer', 'business_id' => $businessB->getKey(), 'name' => 'Not blocked'],
-        ], null, 3000);
+        );
 
-        $this->assertSame('created', $outcomes[0]['status'], json_encode($outcomes));
-        $this->assertLessThan(2.0, $outcomes[0]['seconds'], 'business B must not queue behind business A\'s lock');
+        $this->assertSame('created', $outcome['status'], json_encode($outcome));
         $this->assertSame(1, $businessB->customers()->count());
         $this->assertSame(0, $businessA->customers()->count());
     }

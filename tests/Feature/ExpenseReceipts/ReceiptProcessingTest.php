@@ -19,6 +19,7 @@ use App\Services\ExpenseReceiptService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -253,8 +254,19 @@ class ReceiptProcessingTest extends TestCase
         $receipt = $this->uploadFor($this->user);
         $provider = new ScriptedOcrProvider([new OcrTransientException('The OCR service timed out.')]);
 
+        // The queue's last delivery of the job: it ends the receipt under its own claim and
+        // rethrows, and the queue's failed() hook (a fresh instance) then finds nothing to do.
+        $job = new ProcessExpenseReceipt($receipt->getKey());
+        $job->setJob(new class(app(), '{}', 'sync', 'default') extends SyncJob
+        {
+            public function attempts()
+            {
+                return 3;
+            }
+        });
+
         try {
-            $this->runJob($receipt, $provider);
+            $job->handle(app(ExpenseReceiptService::class), $provider, app(ReceiptExtractionNormalizer::class));
         } catch (OcrTransientException $e) {
             (new ProcessExpenseReceipt($receipt->getKey()))->failed($e);
         }
