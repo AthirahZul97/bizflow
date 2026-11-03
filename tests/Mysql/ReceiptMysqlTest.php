@@ -122,10 +122,10 @@ class ReceiptMysqlTest extends MysqlTestCase
         $this->limitTo($b, ['expenses.ocr_monthly_max' => 1]);
         $other = $this->businessOf($b);
 
-        $outcomes = $this->raceBehindBusinessLock($this->businessOf($a)->getKey(), [$this->upload($other->getKey(), $b->getKey())], null, 3000);
+        // A's lock is held until B's upload has finished: completing proves it did not wait.
+        $outcome = $this->runBesideBusinessLock($this->businessOf($a)->getKey(), $this->upload($other->getKey(), $b->getKey()));
 
-        $this->assertSame('created', $outcomes[0]['status'], json_encode($outcomes));
-        $this->assertLessThan(2.0, $outcomes[0]['seconds'], 'business B must not queue behind business A\'s lock');
+        $this->assertSame('created', $outcome['status'], json_encode($outcome));
     }
 
     // ---- confirming ---------------------------------------------------------------------------
