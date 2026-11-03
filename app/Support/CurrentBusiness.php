@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Business;
 use App\Models\Customer;
 use App\Models\Expense;
+use App\Models\ExpenseReceipt;
 use App\Models\Invoice;
 use App\Models\Product;
 use App\Models\RecurringInvoice;
@@ -83,7 +84,7 @@ class CurrentBusiness
      * The policy rule: the record belongs to the current business, and $user is the
      * member that business was resolved for (so a membership is always behind access).
      */
-    public function owns(User $user, Customer|Product|Invoice|Expense|RecurringInvoice $record): bool
+    public function owns(User $user, Customer|Product|Invoice|Expense|ExpenseReceipt|RecurringInvoice $record): bool
     {
         $business = $this->get();
 

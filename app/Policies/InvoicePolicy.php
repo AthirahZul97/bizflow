@@ -2,9 +2,12 @@
 
 namespace App\Policies;
 
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Enums\InvoiceStatus;
 use App\Models\Invoice;
 use App\Models\User;
+use App\Policies\Concerns\ChecksSubscription;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
@@ -15,7 +18,12 @@ use Illuminate\Auth\Access\Response;
  */
 class InvoicePolicy
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    use ChecksSubscription;
+
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementService $entitlements,
+    ) {}
 
     /**
      * Any authenticated user may list invoices; the query itself is scoped to them.
@@ -28,9 +36,9 @@ class InvoicePolicy
     /**
      * Any authenticated user may create invoices for themselves.
      */
-    public function create(User $user): bool
+    public function create(User $user): Response
     {
-        return true;
+        return $this->subscriptionAllowsWrites();
     }
 
     public function view(User $user, Invoice $invoice): Response
@@ -80,7 +88,7 @@ class InvoicePolicy
     public function downloadPdf(User $user, Invoice $invoice): Response
     {
         return $this->ownsWithStatus($user, $invoice, ! $invoice->status->isDraft(),
-            'Draft invoices don’t have a PDF. Issue the invoice first.');
+            'Draft invoices don’t have a PDF. Issue the invoice first.', write: false);
     }
 
     /**
@@ -95,8 +103,12 @@ class InvoicePolicy
             return $this->ownsWithStatus($user, $invoice, false, 'Cancelled invoices can’t be emailed.');
         }
 
-        return $this->ownsWithStatus($user, $invoice, ! $invoice->status->isDraft(),
+        $response = $this->ownsWithStatus($user, $invoice, ! $invoice->status->isDraft(),
             'Draft invoices can’t be emailed. Issue the invoice first.');
+
+        // Ownership and state first; then the plan must include emailing (a denied check also
+        // covers a read-only subscription).
+        return $response->denied() ? $response : $this->subscriptionAllows(Entitlement::InvoiceEmail);
     }
 
     private function canMove(Invoice $invoice, InvoiceStatus $from, InvoiceStatus $to): bool
@@ -104,12 +116,20 @@ class InvoicePolicy
         return $invoice->status === $from && $from->canTransitionTo($to);
     }
 
-    private function ownsWithStatus(User $user, Invoice $invoice, bool $allowed, string $message): Response
+    /**
+     * Ownership first (404), then, for anything that changes data, the subscription must
+     * allow writes (403), then the invoice's own state rule (403).
+     */
+    private function ownsWithStatus(User $user, Invoice $invoice, bool $allowed, string $message, bool $write = true): Response
     {
         $ownership = $this->owns($user, $invoice);
 
         if ($ownership->denied()) {
             return $ownership;
+        }
+
+        if ($write && ($subscription = $this->subscriptionAllowsWrites())->denied()) {
+            return $subscription;
         }
 
         return $allowed ? Response::allow() : Response::deny($message);

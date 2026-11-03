@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Billing\EntitlementGuard;
+use App\Enums\Entitlement;
 use App\Http\Requests\CustomerRequest;
 use App\Models\Customer;
 use App\Support\CurrentBusiness;
@@ -14,7 +16,10 @@ use Illuminate\View\View;
 
 class CustomerController extends Controller implements HasMiddleware
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementGuard $guard,
+    ) {}
 
     /**
      * Authorize every action through CustomerPolicy.
@@ -64,7 +69,15 @@ class CustomerController extends Controller implements HasMiddleware
      */
     public function store(CustomerRequest $request): RedirectResponse
     {
-        $customer = $this->currentBusiness->get()->customers()->create($request->validated());
+        $business = $this->currentBusiness->get();
+
+        // Counted and inserted under the business row lock, so two requests at the plan's
+        // limit can't both succeed.
+        $customer = $this->guard->create(
+            $business,
+            Entitlement::Customers,
+            fn () => $business->customers()->create($request->validated()),
+        );
 
         return redirect()->route('customers.show', $customer)
             ->with('status', 'Customer created.');

@@ -2,14 +2,22 @@
 
 namespace App\Policies;
 
+use App\Billing\EntitlementService;
+use App\Enums\Entitlement;
 use App\Models\Product;
 use App\Models\User;
+use App\Policies\Concerns\ChecksSubscription;
 use App\Support\CurrentBusiness;
 use Illuminate\Auth\Access\Response;
 
 class ProductPolicy
 {
-    public function __construct(private readonly CurrentBusiness $currentBusiness) {}
+    use ChecksSubscription;
+
+    public function __construct(
+        private readonly CurrentBusiness $currentBusiness,
+        private readonly EntitlementService $entitlements,
+    ) {}
 
     /**
      * Any authenticated user may list items; the query itself is scoped to them.
@@ -20,11 +28,12 @@ class ProductPolicy
     }
 
     /**
-     * Any authenticated user may create items for themselves.
+     * Any authenticated user may create items for themselves, while the subscription allows
+     * writes and the plan has room for one more (inactive items count).
      */
-    public function create(User $user): bool
+    public function create(User $user): Response
     {
-        return true;
+        return $this->subscriptionAllows(Entitlement::Products);
     }
 
     /**
@@ -40,7 +49,7 @@ class ProductPolicy
      */
     public function update(User $user, Product $product): Response
     {
-        return $this->owns($user, $product);
+        return $this->ownsForWrite($user, $product);
     }
 
     /**
@@ -48,7 +57,17 @@ class ProductPolicy
      */
     public function delete(User $user, Product $product): Response
     {
-        return $this->owns($user, $product);
+        return $this->ownsForWrite($user, $product);
+    }
+
+    /**
+     * Ownership first (404 for another business), then the subscription must allow writes (403).
+     */
+    private function ownsForWrite(User $user, Product $product): Response
+    {
+        $ownership = $this->owns($user, $product);
+
+        return $ownership->denied() ? $ownership : $this->subscriptionAllowsWrites();
     }
 
     /**

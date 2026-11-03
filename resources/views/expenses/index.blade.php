@@ -5,7 +5,10 @@
 @section('content')
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
         <h1 class="h3 mb-0">Expenses</h1>
-        <a href="{{ route('expenses.create') }}" class="btn btn-primary">New expense</a>
+        <div class="d-flex gap-2">
+            <a href="{{ route('expense-receipts.index') }}" class="btn btn-outline-primary">Scan receipt</a>
+            <a href="{{ route('expenses.create') }}" class="btn btn-primary">New expense</a>
+        </div>
     </div>
 
     <form method="GET" action="{{ route('expenses.index') }}" class="row g-2 mb-3" role="search">

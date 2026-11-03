@@ -1,0 +1,224 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP (Pint + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, dom, xml, xmlwriter, fileinfo, openssl, tokenizer, ctype, pdo_sqlite, sqlite3, pdo_mysql, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # The views use @vite(), so the feature tests need public/build/manifest.json (gitignored).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build frontend assets
+        run: |
+          npm ci
+          npm run build
+
+      # The tests run on in-memory SQLite (phpunit.xml); they only need an application key.
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      # tests/Mysql is not part of this run: phpunit.xml lists only tests/Unit and tests/Feature.
+      - name: Tests
+        run: php artisan test
+
+      - name: Composer audit
+        run: composer audit --locked
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm audit --omit=dev
+
+  mysql:
+    name: MySQL (tests/Mysql)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # CI-only throwaway credentials for a service container that exists for this job alone.
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          # The scratch database the tests rebuild with migrate:fresh. Its name must contain "scratch".
+          MYSQL_DATABASE: bizflow_ci_scratch
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USERNAME: root
+      DB_PASSWORD: ci_root_pw
+      # The "application" database name. It is never connected to: the MySQL tests refuse to run
+      # unless the scratch name differs from it.
+      DB_DATABASE: bizflow_ci
+      BIZFLOW_MYSQL_SCRATCH: bizflow_ci_scratch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, dom, xml, xmlwriter, fileinfo, openssl, tokenizer, ctype, pdo_sqlite, sqlite3, pdo_mysql, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # The tests build their own schema (migrate:fresh on the scratch database), so there is no
+      # separate migrate step.
+      # DIAGNOSTIC: the same command, with its console output and a JUnit report captured, so the
+      # failing test and message can be read from the run summary and annotations (the job log needs
+      # a GitHub sign-in). `-e` (and `-o pipefail`, if a `shell:` is ever set) would end the script on a
+      # failing test before the report, so `-e` is off for the pipeline only; the command's own status
+      # is read from PIPESTATUS and re-raised by the final `exit`.
+      - name: MySQL tests
+        run: |
+          log="$RUNNER_TEMP/mysql-tests.log"
+          junit="$RUNNER_TEMP/mysql-junit.xml"
+
+          set +e
+          php artisan test tests/Mysql --log-junit="$junit" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          # Report only; this never changes the step's result.
+          MYSQL_TESTS_STATUS="$status" MYSQL_TESTS_LOG="$log" MYSQL_TESTS_JUNIT="$junit" php <<'PHP' || true
+          <?php
+          $status = (int) getenv('MYSQL_TESTS_STATUS');
+          $summaryFile = getenv('GITHUB_STEP_SUMMARY');
+          $esc = fn (string $s) => str_replace(['%', "\r", "\n"], ['%25', '%0D', '%0A'], $s);
+
+          $out = "### MySQL tests (tests/Mysql): exit status {$status}\n\n";
+          $failures = [];
+          $totals = null;
+
+          $junit = (string) getenv('MYSQL_TESTS_JUNIT');
+          if (is_file($junit) && ($xml = @simplexml_load_file($junit)) !== false) {
+              $suite = $xml->getName() === 'testsuites' ? ($xml->testsuite[0] ?? $xml) : $xml;
+              $totals = sprintf(
+                  'Tests: %s, Assertions: %s, Failures: %s, Errors: %s, Warnings: %s, Skipped: %s',
+                  $suite['tests'], $suite['assertions'], $suite['failures'], $suite['errors'], $suite['warnings'] ?? 0, $suite['skipped'] ?? 0,
+              );
+              foreach ($xml->xpath('//testcase') as $case) {
+                  foreach (['failure', 'error', 'warning'] as $kind) {
+                      if (isset($case->$kind)) {
+                          $failures[] = [$kind, $case['class'].'::'.$case['name'], trim((string) $case->$kind)];
+                      }
+                  }
+              }
+          } else {
+              $out .= "No readable JUnit report was written (the run may have stopped before PHPUnit finished).\n\n";
+          }
+
+          if ($totals !== null) {
+              $out .= "**{$totals}**\n\n";
+              echo "PHPUnit: {$totals}\n";
+          }
+
+          foreach ($failures as [$kind, $name, $message]) {
+              $head = implode("\n", array_slice(preg_split('/\R/', $message), 0, 25));
+              $out .= "#### {$kind}: `{$name}`\n```\n{$head}\n```\n";
+              echo "::error title=MySQL test {$kind}: {$name}::".$esc(mb_substr($head, 0, 1500))."\n";
+          }
+
+          // The console failure report as well, whatever the JUnit file held (cleaned of colour codes).
+          if ($status !== 0 && is_file($log = (string) getenv('MYSQL_TESTS_LOG'))) {
+              $lines = preg_split('/\R/', preg_replace('/\e\[[0-9;]*m/', '', (string) file_get_contents($log)));
+              $from = 0;
+              foreach ($lines as $i => $line) {
+                  if (str_contains($line, 'FAILED') || str_contains($line, 'Fatal error') || str_contains($line, 'Exception')) {
+                      $from = $i;
+                      break;
+                  }
+              }
+              $out .= "#### Console output from the first failure\n```\n".implode("\n", array_slice($lines, $from, 200))."\n```\n";
+              if ($failures === []) {
+                  echo '::error title=MySQL tests: no JUnit failure; console tail::'.$esc(implode("\n", array_slice($lines, -25)))."\n";
+              }
+          }
+
+          if ($summaryFile) {
+              file_put_contents($summaryFile, $out, FILE_APPEND);
+          }
+          PHP
+
+          exit "$status"

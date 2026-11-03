@@ -8,12 +8,14 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Creates a new account: the user, their business and the owner membership,
- * all in one transaction. If any step fails nothing is kept, so there is never
+ * Creates a new account: the user, their business, the owner membership and the business's
+ * one free trial, all in one transaction. If any step fails nothing is kept, so there is never
  * a user without a business or a business without its owner.
  */
 class BusinessRegistration
 {
+    public function __construct(private readonly SubscriptionService $subscriptions) {}
+
     /**
      * @param  array{name: string, email: string, password: string, business_name: string}  $data
      */
@@ -30,6 +32,8 @@ class BusinessRegistration
             $business = Business::create(['name' => $data['business_name']]);
 
             $business->members()->attach($user, ['role' => BusinessRole::Owner->value]);
+
+            $this->subscriptions->startTrial($business, $user);
 
             return $user;
         });
