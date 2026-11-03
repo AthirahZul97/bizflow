@@ -21,6 +21,7 @@ use Carbon\CarbonInterface;
 use Closure;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
@@ -347,11 +348,252 @@ class ReceiptRecoveryTest extends TestCase
         $this->assertSame(ExpenseReceiptStatus::Processing, $receipt->refresh()->status);
         $this->assertNotNull($receipt->counted_at);
 
-        // The same call once the claim is stale is allowed: nobody is running it.
+        // Even once the claim is stale it is not this hook's to fail while attempts are left:
+        // the sweeper re-dispatches such a receipt.
         $this->travel($this->stale() + 1)->seconds();
+        $this->assertFalse($this->service()->markFailed($receipt->getKey(), 'Not yours to fail.'));
+        $this->assertSame(ExpenseReceiptStatus::Processing, $receipt->refresh()->status);
+
+        // Out of attempts and nobody running it: nothing could still read it, so it ends.
+        ExpenseReceipt::query()->whereKey($receipt->getKey())->update(['attempts' => (int) config('ocr.max_attempts')]);
         $this->assertTrue($this->service()->markFailed($receipt->getKey(), 'The attempts ran out.'));
         $this->assertSame(ExpenseReceiptStatus::Failed, $receipt->refresh()->status);
         $this->assertNull($receipt->counted_at);
+    }
+
+    // ---- the queue's failed() hook: a fresh instance that knows nothing about any claim -------
+
+    /**
+     * A queue job as the worker sees it on its $delivery-th delivery.
+     */
+    private function onDelivery(ProcessExpenseReceipt $job, int $delivery): ProcessExpenseReceipt
+    {
+        $job->setJob(new class(app(), '{}', 'sync', 'default', $delivery) extends SyncJob
+        {
+            public function __construct($container, $payload, $connectionName, $queue, private readonly int $delivery)
+            {
+                parent::__construct($container, $payload, $connectionName, $queue);
+            }
+
+            public function attempts()
+            {
+                return $this->delivery;
+            }
+        });
+
+        return $job;
+    }
+
+    public function test_an_obsolete_failed_hook_cannot_fail_a_receipt_the_sweeper_has_re_dispatched(): void
+    {
+        // The original job's deliveries ran out (killed, say) while the sweeper has already
+        // re-dispatched the receipt: the new job must still be able to read it.
+        $receipt = $this->uploadFor($this->user);
+        ExpenseReceipt::query()->whereKey($receipt->getKey())->update(['attempts' => 2, 'updated_at' => now()->subSeconds($this->idle() + 1)]);
+        $this->assertSame(1, $this->service()->recoverStuck()['redispatched']);
+
+        (new ProcessExpenseReceipt($receipt->getKey()))->failed(new OcrTransientException('The OCR service timed out.'));
+
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Queued, $row->status);
+        $this->assertNotNull($row->counted_at, 'its unit is untouched');
+        $this->assertNull($row->failed_at);
+
+        $this->runJob($receipt, new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]));
+        $this->assertSame(ExpenseReceiptStatus::Review, $row->refresh()->status);
+    }
+
+    public function test_an_obsolete_failed_hook_cannot_fail_a_receipt_another_worker_has_claimed(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        $old = $this->service()->claim($receipt->getKey());
+        $this->travel($this->stale() + 1)->seconds();
+        $new = $this->service()->claim($receipt->getKey());
+
+        // The first dispatch gives up late: without a claim, and then as the holder of the old one.
+        (new ProcessExpenseReceipt($receipt->getKey()))->failed(new OcrTransientException('timed out'));
+        $this->assertFalse($this->service()->markFailed($receipt->getKey(), 'late', $old->attempts, $old->processing_started_at));
+
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Processing, $row->status);
+        $this->assertSame(2, $row->attempts);
+        $this->assertNotNull($row->counted_at);
+
+        $this->assertTrue($this->service()->markExtracted($new, $this->normalized()), 'the current claim still finishes');
+    }
+
+    public function test_an_obsolete_failed_hook_cannot_fail_a_receipt_recovery_has_revoked_and_not_yet_re_claimed(): void
+    {
+        $receipt = $this->stuckProcessing();
+        $this->travel($this->stale() + 1)->seconds();
+        $this->assertSame(1, $this->service()->recoverStuck()['redispatched']);
+        $this->assertNull($receipt->refresh()->processing_started_at);
+
+        (new ProcessExpenseReceipt($receipt->getKey()))->failed(new OcrTransientException('timed out'));
+
+        $this->assertSame(ExpenseReceiptStatus::Processing, $receipt->refresh()->status);
+        $this->assertNotNull($receipt->counted_at);
+    }
+
+    public function test_a_claim_ends_nothing_once_the_receipt_is_back_in_the_queue(): void
+    {
+        // The owner put the receipt back for a retry and the sweeper re-dispatched it: the old
+        // claim, still carrying its attempts and start, owns nothing any more.
+        $receipt = $this->uploadFor($this->user);
+        $owner = $this->service()->claim($receipt->getKey());
+        $this->assertTrue($this->service()->markForRetry($owner, 'timed out'));
+        $this->travel($this->idle() + 1)->seconds();
+        $this->service()->recoverStuck();
+
+        $this->assertFalse($this->service()->markFailed($receipt->getKey(), 'late', $owner->attempts, $owner->processing_started_at));
+        $this->assertSame(ExpenseReceiptStatus::Queued, $receipt->refresh()->status);
+        $this->assertNotNull($receipt->counted_at);
+    }
+
+    public function test_the_failed_hook_still_ends_a_receipt_that_has_used_all_its_attempts(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        ExpenseReceipt::query()->whereKey($receipt->getKey())->update(['attempts' => (int) config('ocr.max_attempts')]);
+
+        (new ProcessExpenseReceipt($receipt->getKey()))->failed(new OcrTransientException('The OCR service timed out.'));
+
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Failed, $row->status);
+        $this->assertNull($row->counted_at, 'the unit is released');
+        $this->assertSame('The OCR service timed out.', $row->last_error);
+    }
+
+    public function test_the_last_delivery_ends_the_receipt_under_its_own_claim_and_earlier_ones_queue_it(): void
+    {
+        $transient = fn () => new ScriptedOcrProvider([new OcrTransientException('The OCR service timed out.')]);
+
+        $early = $this->uploadFor($this->user);
+        $job = $this->onDelivery(new ProcessExpenseReceipt($early->getKey()), 2);
+        try {
+            $job->handle($this->service(), $transient(), app(ReceiptExtractionNormalizer::class));
+        } catch (OcrTransientException) {
+        }
+        $this->assertSame(ExpenseReceiptStatus::Queued, $early->refresh()->status, 'a delivery with retries left queues it');
+
+        $last = $this->uploadFor($this->user);
+        $job = $this->onDelivery(new ProcessExpenseReceipt($last->getKey()), (new ProcessExpenseReceipt(0))->tries);
+        try {
+            $job->handle($this->service(), $transient(), app(ReceiptExtractionNormalizer::class));
+            $this->fail('the job still rethrows so the queue records the failure');
+        } catch (OcrTransientException) {
+        }
+
+        $row = $last->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Failed, $row->status);
+        $this->assertNull($row->counted_at);
+        $this->assertSame('The OCR service timed out.', $row->last_error);
+    }
+
+    public function test_the_last_delivery_of_a_superseded_run_fails_nothing(): void
+    {
+        $receipt = $this->uploadFor($this->user);
+        $job = $this->onDelivery(new ProcessExpenseReceipt($receipt->getKey()), (new ProcessExpenseReceipt(0))->tries);
+        $slow = new ScriptedOcrProvider([function () {
+            $this->travel($this->stale() + 1)->seconds();
+            $this->service()->recoverStuck();
+
+            return new OcrTransientException('timed out');
+        }]);
+
+        try {
+            $job->handle($this->service(), $slow, app(ReceiptExtractionNormalizer::class));
+        } catch (OcrTransientException) {
+        }
+
+        $row = $receipt->refresh();
+        $this->assertSame(ExpenseReceiptStatus::Processing, $row->status, 'the revoked run could not end it');
+        $this->assertNotNull($row->counted_at);
+        $this->runJob($receipt, new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]));
+        $this->assertSame(ExpenseReceiptStatus::Review, $row->refresh()->status);
+    }
+
+    // ---- finished, discarded and other businesses' receipts are not the sweeper's ---------------
+
+    public function test_the_sweeper_leaves_finished_discarded_and_failed_receipts_alone(): void
+    {
+        $business = $this->businessOf($this->user);
+        $old = now()->subDay();
+        $rows = [];
+
+        foreach (['inReview', 'failed'] as $state) {
+            $rows[$state] = ExpenseReceipt::factory()->{$state}()->create(['business_id' => $business->getKey()]);
+        }
+        $rows['discarded'] = ExpenseReceipt::factory()->create(['business_id' => $business->getKey(), 'status' => ExpenseReceiptStatus::Discarded, 'counted_at' => null]);
+        $rows['unreadable'] = ExpenseReceipt::factory()->create(['business_id' => $business->getKey(), 'status' => ExpenseReceiptStatus::Unreadable]);
+        $rows['confirmed'] = ExpenseReceipt::factory()->create(['business_id' => $business->getKey(), 'status' => ExpenseReceiptStatus::Confirmed]);
+
+        foreach ($rows as $receipt) {
+            ExpenseReceipt::query()->whereKey($receipt->getKey())->update(['updated_at' => $old, 'attempts' => (int) config('ocr.max_attempts')]);
+        }
+
+        $this->assertSame(['redispatched' => 0, 'failed' => 0, 'dispatch_errors' => 0], $this->service()->recoverStuck());
+
+        foreach ($rows as $name => $receipt) {
+            $this->assertSame($receipt->status, $receipt->fresh()->status, $name);
+            $this->assertEquals($receipt->counted_at, $receipt->fresh()->counted_at, "{$name}: quota untouched");
+        }
+    }
+
+    public function test_a_discarded_receipt_is_not_revived_by_a_late_worker_a_redelivered_job_or_the_sweeper(): void
+    {
+        // A worker reads and saves it; the user discards it while that worker's job is still
+        // being redelivered, retried and swept. (A receipt being processed can't be discarded.)
+        $receipt = $this->uploadFor($this->user);
+        $owner = $this->service()->claim($receipt->getKey());
+        $this->assertTrue($this->service()->markExtracted($owner, $this->normalized()));
+
+        $this->service()->discard($this->businessOf($this->user), $receipt->refresh());
+        $this->assertSame(ExpenseReceiptStatus::Discarded, $receipt->refresh()->status);
+
+        $this->travel($this->stale() + $this->idle() + 1)->seconds();
+        $this->assertSame(0, $this->service()->recoverStuck()['redispatched']);
+        $this->assertFalse($this->service()->markExtracted($owner, $this->normalized()));
+        $this->assertFalse($this->service()->markForRetry($owner, 'late'));
+        $this->assertFalse($this->service()->markFailed($receipt->getKey(), 'late', $owner->attempts, $owner->processing_started_at));
+        $this->service()->markFailed($receipt->getKey(), 'late');
+
+        $this->assertSame(ExpenseReceiptStatus::Discarded, $receipt->refresh()->status);
+        $this->assertNull($receipt->extraction);
+        $this->runJob($receipt, new ScriptedOcrProvider([ScriptedOcrProvider::extraction()]));
+        $this->assertSame(ExpenseReceiptStatus::Discarded, $receipt->refresh()->status, 'a redelivered job reads nothing');
+    }
+
+    public function test_a_sweep_across_two_businesses_changes_each_receipt_only_within_its_own_business(): void
+    {
+        $other = User::factory()->create();
+        $a = $this->businessOf($this->user);
+        $b = $this->businessOf($other);
+        $max = (int) config('ocr.max_attempts');
+        $old = now()->subSeconds($this->stale() + $this->idle() + 1);
+
+        $exhaustedA = ExpenseReceipt::factory()->create(['business_id' => $a->getKey(), 'status' => ExpenseReceiptStatus::Queued, 'attempts' => $max]);
+        $stuckB = ExpenseReceipt::factory()->create(['business_id' => $b->getKey(), 'status' => ExpenseReceiptStatus::Processing, 'attempts' => 1, 'processing_started_at' => $old]);
+        $liveB = ExpenseReceipt::factory()->create(['business_id' => $b->getKey(), 'status' => ExpenseReceiptStatus::Processing, 'attempts' => 1, 'processing_started_at' => now()]);
+        foreach ([$exhaustedA, $stuckB] as $receipt) {
+            ExpenseReceipt::query()->whereKey($receipt->getKey())->update(['updated_at' => $old]);
+        }
+
+        $unitsA = app(EntitlementService::class)->fresh($a)->used(Entitlement::ReceiptOcr);
+        $unitsB = app(EntitlementService::class)->fresh($b)->used(Entitlement::ReceiptOcr);
+
+        $this->assertSame(['redispatched' => 1, 'failed' => 1, 'dispatch_errors' => 0], $this->service()->recoverStuck());
+
+        $this->assertSame(ExpenseReceiptStatus::Failed, $exhaustedA->fresh()->status);
+        $this->assertSame($a->getKey(), $exhaustedA->fresh()->business_id);
+        $this->assertSame($b->getKey(), $stuckB->fresh()->business_id);
+        $this->assertSame(ExpenseReceiptStatus::Processing, $stuckB->fresh()->status);
+        $this->assertSame(ExpenseReceiptStatus::Processing, $liveB->fresh()->status);
+
+        // A's receipt gave A its unit back; B's allowance did not move.
+        $this->assertSame($unitsA - 1, app(EntitlementService::class)->fresh($a)->used(Entitlement::ReceiptOcr));
+        $this->assertSame($unitsB, app(EntitlementService::class)->fresh($b)->used(Entitlement::ReceiptOcr));
+        $this->assertSame(1, $this->dispatchedFor($stuckB));
+        $this->assertSame(0, $this->dispatchedFor($exhaustedA));
     }
 
     // ---- ownership: a superseded worker ------------------------------------------------------

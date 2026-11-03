@@ -8,7 +8,6 @@ use App\Ocr\Exceptions\OcrPermanentException;
 use App\Ocr\ReceiptExtractionNormalizer;
 use App\Ocr\ReceiptOcrProvider;
 use App\Services\ExpenseReceiptService;
-use Carbon\CarbonInterface;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Foundation\Queue\Queueable;
@@ -51,14 +50,6 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
      */
     public int $timeout = 60;
 
-    /**
-     * The claim this run holds (its generation and start), so failed() can fail exactly that
-     * claim and nothing a newer attempt or a recovery has since taken over.
-     */
-    private ?int $claimedAttempt = null;
-
-    private ?CarbonInterface $claimedStartedAt = null;
-
     public function __construct(public readonly int $expenseReceiptId) {}
 
     public function handle(ExpenseReceiptService $receipts, ReceiptOcrProvider $provider, ReceiptExtractionNormalizer $normalizer): void
@@ -68,9 +59,6 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
         if ($receipt === null) {
             return;
         }
-
-        $this->claimedAttempt = $receipt->attempts;
-        $this->claimedStartedAt = $receipt->processing_started_at;
 
         try {
             $normalized = $normalizer->normalize($provider->extract($receipts->document($receipt)));
@@ -89,10 +77,18 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
                 throw $e;
             }
         } catch (Throwable $e) {
-            // Temporary, or not certainly permanent: back to queued for the next attempt. When
-            // the attempts run out the queue calls failed().
+            // Temporary, or not certainly permanent: back to queued for the next attempt. On the
+            // queue's last delivery there is no next one, and only this run still knows which claim
+            // it holds (the queue's failed() hook gets a fresh instance that knows nothing), so
+            // it ends the receipt here, atomically with proof of its claim.
+            $message = $e instanceof OcrException ? $e->getMessage() : 'The receipt could not be read. Please try again.';
+
             try {
-                $receipts->markForRetry($receipt, $e instanceof OcrException ? $e->getMessage() : 'The receipt could not be read. Please try again.');
+                if ($this->attempts() >= $this->tries) {
+                    $receipts->markFailed($receipt->getKey(), $message, $receipt->attempts, $receipt->processing_started_at);
+                } else {
+                    $receipts->markForRetry($receipt, $message);
+                }
             } catch (Throwable $recovery) {
                 report($recovery);
             }
@@ -102,7 +98,12 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
     }
 
     /**
-     * All attempts are used up.
+     * The queue gave up on this job (its deliveries ran out, or it was killed). Laravel builds a
+     * fresh instance from the payload for this call, so it holds no claim and may belong to a
+     * dispatch that has long been superseded by a sweep or a newer worker. It therefore asks the
+     * service for the claim-less failure only, which touches nothing but a receipt that has used
+     * all its attempts and that nobody is running. Everything else is left to the sweeper, and a
+     * run that did hold a claim on its last delivery has already ended the receipt in handle().
      */
     public function failed(?Throwable $e): void
     {
@@ -110,8 +111,6 @@ class ProcessExpenseReceipt implements ShouldQueue, ShouldQueueAfterCommit
             app(ExpenseReceiptService::class)->markFailed(
                 $this->expenseReceiptId,
                 $e instanceof OcrException ? $e->getMessage() : 'The receipt could not be read. Please try again.',
-                $this->claimedAttempt,
-                $this->claimedStartedAt,
             );
         } catch (Throwable $recovery) {
             // Nothing else can be done here; the sweeper finds the row and finishes the job.

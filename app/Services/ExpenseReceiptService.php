@@ -156,6 +156,12 @@ class ExpenseReceiptService
     /**
      * Claim a receipt for one OCR run. Returns it only if this call moved it to "processing";
      * otherwise null, and nothing may be read.
+     *
+     * Entitlement lost since the upload (a lapse, a downgrade, read-only access) is deliberate,
+     * terminal behaviour: the receipt is failed for good and its unit of allowance released, the
+     * file kept for manual entry. It is not skipped and retried, because a later retry would run
+     * on a plan that no longer includes OCR, and a business that cannot use the feature must not
+     * keep holding quota for it. This also applies to receipts the sweeper re-dispatches.
      */
     public function claim(int $receiptId): ?ExpenseReceipt
     {
@@ -178,7 +184,7 @@ class ExpenseReceiptService
             }
 
             if ($receipt->attempts >= (int) config('ocr.max_attempts')) {
-                $this->failBecauseAttemptsAreUsedUp($receipt->getKey(), $receipt->attempts);
+                $this->failBecauseAttemptsAreUsedUp($receipt->getKey(), $receipt->attempts, $receipt->business_id);
 
                 return null;
             }
@@ -191,7 +197,7 @@ class ExpenseReceiptService
             $entitled = $this->entitlements->fresh($business)->check(Entitlement::ReceiptOcr, 0);
 
             if (! $entitled->allowed) {
-                $this->failAttempt($receipt->getKey(), 'Not read: '.$entitled->message(), $receipt->attempts);
+                $this->failAttempt($receipt->getKey(), 'Not read: '.$entitled->message(), $receipt->attempts, $receipt->business_id);
 
                 return null;
             }
@@ -274,10 +280,18 @@ class ExpenseReceiptService
      *
      * With $attempt and $claimStartedAt (the claim the caller holds: the receipt's attempts and
      * processing_started_at as claim() returned them) only that exact claim can fail the row, so
-     * a superseded or revoked worker cannot fail a newer attempt. A claim whose start is not
-     * given cannot be proven and fails nothing. Without a claim (the queue's failed() hook for a
-     * job that never claimed) only work nobody is running is failed: a queued row, or a
-     * processing row whose claim is stale or revoked, never a live claim.
+     * a superseded or revoked worker cannot fail a newer attempt. A claim is only meaningful while
+     * the row is "processing": once the owner has put it back in the queue (or a sweep has
+     * re-dispatched it) the claim owns nothing and fails nothing. A claim whose start is not
+     * given cannot be proven and fails nothing.
+     *
+     * Without a claim (the queue's failed() hook: Laravel builds a fresh job instance for it, so
+     * it never knows which run it belongs to, and it may belong to a dispatch that has since been
+     * superseded) only a receipt that has used all its attempts is failed, and only while nobody
+     * is running it: a queued row, or a processing row whose claim is stale or revoked, never a
+     * live claim. Any job that claims such a row would fail it the same way, so this cannot cut
+     * short work that a newer dispatch could still do. Receipts with attempts left are never
+     * failed here; the sweeper re-dispatches them.
      */
     public function markFailed(int $receiptId, string $error, ?int $attempt = null, ?CarbonInterface $claimStartedAt = null): bool
     {
@@ -288,18 +302,19 @@ class ExpenseReceiptService
                 return false;
             }
 
-            $query->whereIn('status', [ExpenseReceiptStatus::Queued->value, ExpenseReceiptStatus::Processing->value])
+            $query->where('status', ExpenseReceiptStatus::Processing->value)
                 ->where('attempts', $attempt)
                 ->whereNotNull('processing_started_at')
                 ->where('processing_started_at', $claimStartedAt);
         } else {
             $staleBefore = now()->subSeconds((int) config('ocr.stale_processing_seconds'));
 
-            $query->where(function ($query) use ($staleBefore) {
-                $query->where('status', ExpenseReceiptStatus::Queued->value)
-                    ->orWhere(fn ($query) => $query->where('status', ExpenseReceiptStatus::Processing->value)
-                        ->where(fn ($query) => $query->whereNull('processing_started_at')->orWhere('processing_started_at', '<', $staleBefore)));
-            });
+            $query->where('attempts', '>=', (int) config('ocr.max_attempts'))
+                ->where(function ($query) use ($staleBefore) {
+                    $query->where('status', ExpenseReceiptStatus::Queued->value)
+                        ->orWhere(fn ($query) => $query->where('status', ExpenseReceiptStatus::Processing->value)
+                            ->where(fn ($query) => $query->whereNull('processing_started_at')->orWhere('processing_started_at', '<', $staleBefore)));
+                });
         }
 
         return $query->update([
@@ -316,10 +331,11 @@ class ExpenseReceiptService
      * (claim() under its lock, and the sweeper with the generation it just read), not for a
      * worker, which must prove its claim with markFailed().
      */
-    private function failAttempt(int $receiptId, string $error, int $attempt): bool
+    private function failAttempt(int $receiptId, string $error, int $attempt, ?int $businessId = null): bool
     {
         return ExpenseReceipt::query()
             ->whereKey($receiptId)
+            ->when($businessId !== null, fn ($query) => $query->where('business_id', $businessId))
             ->whereIn('status', [ExpenseReceiptStatus::Queued->value, ExpenseReceiptStatus::Processing->value])
             ->where('attempts', $attempt)
             ->update([
@@ -331,9 +347,9 @@ class ExpenseReceiptService
             ]) === 1;
     }
 
-    private function failBecauseAttemptsAreUsedUp(int $receiptId, int $attempt): bool
+    private function failBecauseAttemptsAreUsedUp(int $receiptId, int $attempt, ?int $businessId = null): bool
     {
-        return $this->failAttempt($receiptId, 'This receipt has been read too many times without success. Enter the details by hand.', $attempt);
+        return $this->failAttempt($receiptId, 'This receipt has been read too many times without success. Enter the details by hand.', $attempt, $businessId);
     }
 
     /**
@@ -374,6 +390,15 @@ class ExpenseReceiptService
      * the process dies between the two, the row simply becomes a candidate again one idle period
      * later. Nothing here can lose work or run it twice at the same time.
      *
+     * This is the one deliberately global read in the OCR code, a system-level maintenance
+     * exception to "start every query from the business". It exists because a stuck receipt is
+     * found by its state, not by a tenant: walking every business each minute would cost far more
+     * than it protects, and the sweep needs no business context. It reads only identifiers and
+     * state (never receipt contents), calls no provider, and every write it makes is pinned to
+     * the candidate's own id AND business_id, so a row can only ever be changed as a member of the
+     * business it was read from. Quota is accounted per receipt (counted_at) and per business, so
+     * releasing one receipt's unit can not touch another business's allowance.
+     *
      * @return array{redispatched: int, failed: int, dispatch_errors: int}
      */
     public function recoverStuck(?CarbonImmutable $now = null): array
@@ -385,7 +410,7 @@ class ExpenseReceiptService
         $limit = max(1, (int) config('ocr.recovery_batch'));
 
         $candidates = DB::table('expense_receipts')
-            ->select(['id', 'status', 'attempts', 'updated_at', 'processing_started_at'])
+            ->select(['id', 'business_id', 'status', 'attempts', 'updated_at', 'processing_started_at'])
             ->where('updated_at', '<', $idleBefore)
             ->where(function ($query) use ($staleBefore) {
                 $query->where('status', ExpenseReceiptStatus::Queued->value)
@@ -402,9 +427,10 @@ class ExpenseReceiptService
         foreach ($candidates as $row) {
             $id = (int) $row->id;
             $attempts = (int) $row->attempts;
+            $businessId = (int) $row->business_id;
 
             if ($attempts >= $maxAttempts) {
-                if ($this->failBecauseAttemptsAreUsedUp($id, $attempts)) {
+                if ($this->failBecauseAttemptsAreUsedUp($id, $attempts, $businessId)) {
                     $result['failed']++;
                 }
 
@@ -420,6 +446,7 @@ class ExpenseReceiptService
 
             $won = ExpenseReceipt::query()
                 ->whereKey($id)
+                ->where('business_id', $businessId)
                 ->where('status', $row->status)
                 ->where('attempts', $attempts)
                 ->where('updated_at', $row->updated_at)
@@ -446,6 +473,7 @@ class ExpenseReceiptService
                 // so a change made meanwhile (a newer claim, a new status) is never undone.
                 ExpenseReceipt::query()
                     ->whereKey($id)
+                    ->where('business_id', $businessId)
                     ->where('status', $row->status)
                     ->where('attempts', $attempts)
                     ->where('updated_at', $now)
